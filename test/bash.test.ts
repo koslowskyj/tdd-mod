@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { bashWriteTargets as targetsIn } from './bash.ts'
-import { isInScope, readConfig } from './config.ts'
+import { bashWriteTargets as targetsIn } from '../src/bash.ts'
+import { isInScope, readConfig } from '../src/config.ts'
 
 const config = readConfig({ extensions: "ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,rb,php,cs,fs,swift,c,cc,cpp,h,hpp,ex,exs,erl,clj,dart,lua,ipynb,vue,svelte", ignore: "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**" })
 const bashWriteTargets = (command: string) => targetsIn(command, path => isInScope(path, config))

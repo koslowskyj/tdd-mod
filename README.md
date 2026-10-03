@@ -149,7 +149,7 @@ benchmark. Add a case whenever the judge gets a real write wrong.
 
 ```sh
 claude plugin validate .   # manifest and hooks, as the engine reads them
-claude plugin test .       # unit and hook tests (hooks/*.test.ts)
+claude plugin test .       # unit and hook tests (test/*.test.ts)
 npx -p typescript@5 tsc -p .
 ```
 
@@ -164,14 +164,16 @@ models.
 
 | File | What it holds |
 |---|---|
-| `hooks/register.ts` | The hooks: prompt classification, the write and Bash guards, `/tdd-eval` |
-| `hooks/guard.ts` | The two decisions: task kind, and pass/violation for a write |
-| `hooks/prompt.ts` | The judge's TDD rules, ported from probity |
-| `hooks/tdd.ts` | Prompt building, session history, applying an Edit, the one-new-test check |
-| `hooks/task.ts` | The task classifier prompt and the guard-override rule |
-| `hooks/bash.ts` | Which source files a shell command would write |
-| `hooks/config.ts` | Settings, globs, which files are in scope |
-| `hooks/eval.ts` | The `/tdd-eval` runner |
+| `hooks/hooks.json` | Points Claude Code at `src/register.ts` |
+| `src/register.ts` | The hooks: prompt classification, the write and Bash guards, `/tdd-eval` |
+| `src/guard.ts` | The two decisions: task kind, and pass/violation for a write |
+| `src/prompt.ts` | The judge's TDD rules, ported from probity |
+| `src/tdd.ts` | Prompt building, session history, applying an Edit, the one-new-test check |
+| `src/task.ts` | The task classifier prompt and the guard-override rule |
+| `src/bash.ts` | Which source files a shell command would write |
+| `src/config.ts` | Settings, globs, which files are in scope |
+| `src/eval.ts` | The `/tdd-eval` runner |
+| `test/` | Unit and hook tests, run by `claude plugin test .` |
 | `eval/` | The regression cases |
 
 ## Known limits
@@ -189,7 +191,7 @@ models.
 
 ## Credits
 
-The TDD rules in `hooks/prompt.ts` are from
+The TDD rules in `src/prompt.ts` are from
 [probity](https://github.com/nizos/probity) by Nizar Selander, MIT License.
 
 ## License

@@ -1,8 +1,8 @@
 import type { ModelCompleteResult, On, SessionMessage } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
-import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from './task.ts'
-import { globToRegExp, isInScope, readConfig, readTestPatterns } from './config.ts'
-import { addsExactlyOneTest, applyEdit, buildPrompt, parseVerdict, toHistory, trimHistory } from './tdd.ts'
+import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
+import { globToRegExp, isInScope, readConfig, readTestPatterns } from '../src/config.ts'
+import { addsExactlyOneTest, applyEdit, buildPrompt, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const SRC = '/repo/src/cart.ts'
