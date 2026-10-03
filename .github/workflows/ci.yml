@@ -31,8 +31,12 @@ jobs:
           npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude --version
 
-      - name: Validate the plugin
-        run: claude plugin validate .
+      # With a marketplace.json beside it, `validate .` checks only the
+      # marketplace; name both manifests so the hooks are checked too.
+      - name: Validate the plugin and the marketplace
+        run: |
+          claude plugin validate --strict .claude-plugin/plugin.json
+          claude plugin validate --strict .claude-plugin/marketplace.json
 
       - name: Run the tests
         run: claude plugin test .
@@ -47,3 +51,72 @@ jobs:
 
       - name: Type-check
         run: npx --yes --package typescript@5 tsc -p .
+
+  # Every push to main that passes the checks is released: the version in
+  # plugin.json is bumped, committed and tagged, and a GitHub release is made.
+  # Installs from this repo's marketplace (`/plugin marketplace add
+  # koslowskyj/tdd-mod`) pick the new version up on their next update.
+  release:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the next version
+        id: version
+        run: |
+          current=$(jq -r .version .claude-plugin/plugin.json)
+          last_tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          if [ -z "$last_tag" ]; then
+            # First release: publish the version plugin.json already names.
+            next=$current
+          else
+            log=$(git log --format='%s%n%b' "$last_tag"..HEAD)
+            if [ -z "$(git rev-list "$last_tag"..HEAD)" ]; then
+              echo "Nothing since $last_tag."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            IFS=. read -r major minor patch <<< "${last_tag#v}"
+            if grep -qE '^[a-z]+(\(.+\))?!:|BREAKING CHANGE' <<< "$log"; then
+              next="$((major + 1)).0.0"
+            elif grep -qE '^feat(\(.+\))?:' <<< "$log"; then
+              next="$major.$((minor + 1)).0"
+            else
+              next="$major.$minor.$((patch + 1))"
+            fi
+          fi
+          echo "Releasing $next (last tag: ${last_tag:-none}, plugin.json: $current)"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the version and tag it
+        if: steps.version.outputs.skip != 'true'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          jq --arg v "$NEXT" '.version = $v' .claude-plugin/plugin.json > plugin.json.tmp
+          mv plugin.json.tmp .claude-plugin/plugin.json
+          if ! git diff --quiet; then
+            git commit -am "chore(release): v$NEXT"
+          fi
+          git tag "v$NEXT"
+          git push origin HEAD:main "v$NEXT"
+
+      - name: Create the GitHub release
+        if: steps.version.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          gh release create "v$NEXT" --title "v$NEXT" --generate-notes \
+            --notes "Install: \`/plugin marketplace add koslowskyj/tdd-mod\`, then \`/plugin install tdd-mod@tdd-mod\`. Update: \`/plugin marketplace update tdd-mod\`."

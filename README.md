@@ -46,8 +46,17 @@ or process per write.
 
 ## Quick start
 
+Install it from this repository's marketplace, in Claude Code:
+
+```
+/plugin marketplace add koslowskyj/tdd-mod
+/plugin install tdd-mod@tdd-mod
+```
+
+Or run it from a clone, for one session:
+
 ```sh
-git clone <this repo> ~/tdd-mod
+git clone https://github.com/koslowskyj/tdd-mod.git ~/tdd-mod
 cd your-project
 claude --plugin-dir ~/tdd-mod
 ```
@@ -72,13 +81,15 @@ and to change files with Write and Edit only.
 
 ## Settings
 
-Change them in `/config`, or under `pluginConfigs` in `settings.json`. A
-`--plugin-dir` plugin is keyed `tdd-mod` (or `tdd-mod@inline`):
+Change them in `/config`, with `/plugin configure tdd-mod@tdd-mod`, or under
+`pluginConfigs` in `settings.json`. Installed from the marketplace the plugin is
+keyed `tdd-mod@tdd-mod`; loaded with `--plugin-dir`, `tdd-mod` (or
+`tdd-mod@inline`):
 
 ```json
 {
   "pluginConfigs": {
-    "tdd-mod": { "options": { "judgeModel": "sonnet" } }
+    "tdd-mod@tdd-mod": { "options": { "judgeModel": "sonnet" } }
   }
 }
 ```
@@ -108,7 +119,7 @@ per extension; an empty regex turns the fast path off for those extensions:
 ```json
 {
   "pluginConfigs": {
-    "tdd-mod": {
+    "tdd-mod@tdd-mod": {
       "options": {
         "testPatterns": "{\"ts,js\": \"\\\\bscenario\\\\(\", \"ex,exs\": \"^\\\\s*test \\\"\", \"go\": \"\"}"
       }
@@ -148,7 +159,8 @@ benchmark. Add a case whenever the judge gets a real write wrong.
 ## Development
 
 ```sh
-claude plugin validate .   # manifest and hooks, as the engine reads them
+claude plugin validate .claude-plugin/plugin.json        # manifest and hooks, as the engine reads them
+claude plugin validate .claude-plugin/marketplace.json   # the marketplace entry
 claude plugin test .       # unit and hook tests (test/*.test.ts)
 npx -p typescript@5 tsc -p .
 ```
@@ -157,13 +169,32 @@ npx -p typescript@5 tsc -p .
 writes when it loads the mod. Load it once (`claude --plugin-dir .`) before
 type-checking.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the same three checks on every
-push to `main` and on pull requests, against the pinned Claude Code version.
-None of them needs credentials. `/tdd-eval` is not part of CI: it calls the
-models.
+GitHub Actions (`.github/workflows/ci.yml`) runs these checks on every push to
+`main` and on pull requests, against the pinned Claude Code version. None of
+them needs credentials. `/tdd-eval` is not part of CI: it calls the models.
+
+### Releases
+
+Every push to `main` that passes the checks is released. The release job bumps
+the version in `.claude-plugin/plugin.json` from the commit messages since the
+last tag, commits it, tags `vX.Y.Z` and creates a GitHub release:
+
+| Commits since the last release | Bump |
+|---|---|
+| `feat!:` or `BREAKING CHANGE` | major |
+| `feat:` | minor |
+| anything else | patch |
+
+Installed copies get the new version with `/plugin marketplace update tdd-mod`
+(or Claude Code's marketplace auto-update). The official Anthropic marketplace
+takes third-party plugins only through its
+[submission form](https://clau.de/plugin-directory-submission), so that step is
+manual.
 
 | File | What it holds |
 |---|---|
+| `.claude-plugin/plugin.json` | The plugin manifest: name, version, settings |
+| `.claude-plugin/marketplace.json` | Makes this repository a marketplace that lists the plugin |
 | `hooks/hooks.json` | Points Claude Code at `src/register.ts` |
 | `src/register.ts` | The hooks: prompt classification, the write and Bash guards, `/tdd-eval` |
 | `src/guard.ts` | The two decisions: task kind, and pass/violation for a write |

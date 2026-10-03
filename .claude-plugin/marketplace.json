@@ -1,0 +1,15 @@
+{
+  "name": "tdd-mod",
+  "description": "tdd-mod, an experimental Claude Code mod that enforces test-driven development on coding tasks.",
+  "owner": {
+    "name": "koslowskyj",
+    "email": "19502456+koslowskyj@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "tdd-mod",
+      "source": "./",
+      "description": "Experimental: on coding tasks, a judge model blocks file writes that skip a failing test or over-implement, and tells the agent why."
+    }
+  ]
+}
