@@ -89,8 +89,8 @@ Change them in `/config`, or under `pluginConfigs` in `settings.json`. A
 | `classifyTasks` | `true` | Off, every task counts as coding and every write is judged. |
 | `fastPath` | `true` | Pass a write that adds exactly one test without a model call. Faster, but a new test no longer checks for a refactor left unmade. |
 | `secondOpinion` | `true` | Block only when a second judge call agrees. |
-| `extensions` | `ts,tsx,js,py,go,rs,java,…` | Comma-separated extensions of the files judged. |
-| `ignore` | `**/node_modules/**,**/dist/**,…` | Comma-separated globs of paths never judged. |
+| `extensions` | `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, `cjs`, `py`, `go`, `rs`, `java`, `kt`, `kts`, `scala`, `rb`, `php`, `cs`, `fs`, `swift`, `c`, `cc`, `cpp`, `h`, `hpp`, `ex`, `exs`, `erl`, `clj`, `dart`, `lua`, `ipynb`, `vue`, `svelte` | Comma-separated extensions of the files judged. |
+| `ignore` | `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/vendor/**`, `**/.git/**`, `**/.claude/**` | Comma-separated globs of paths never judged. |
 
 A change in `/config` reloads the mod with the new values.
 
