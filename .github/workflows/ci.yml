@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The function-hooks API is early access and may change between releases:
+  # test against the version the mod is built on, and raise it on purpose.
+  CLAUDE_CODE_VERSION: 2.1.288
+  DISABLE_AUTOUPDATER: '1'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: |
+          npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      - name: Validate the plugin
+        run: claude plugin validate .
+
+      - name: Run the tests
+        run: claude plugin test .
+
+      # The engine writes the API's type definitions when it loads the mod.
+      # A headless start does that before it stops for want of a login, so
+      # no credentials are needed; the step then checks the types are there.
+      - name: Lay down the type definitions
+        run: |
+          claude -p "hi" --plugin-dir . || true
+          test -f .claude-plugin/types/claude-code/index.d.ts
+
+      - name: Type-check
+        run: npx --yes --package typescript@5 tsc -p .

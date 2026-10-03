@@ -1,5 +1,7 @@
 # tdd-mod
 
+[![CI](https://github.com/koslowskyj/tdd-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/koslowskyj/tdd-mod/actions/workflows/ci.yml)
+
 > **Experimental.** This is an experiment in enforcing test-driven development
 > on a coding agent. It works in a kata, has not been used on a real codebase
 > yet, and its settings, behaviour and the Claude Code API it is built on may
@@ -154,6 +156,11 @@ npx -p typescript@5 tsc -p .
 `tsconfig.json` extends `.claude-plugin/types/tsconfig.json`, which Claude Code
 writes when it loads the mod. Load it once (`claude --plugin-dir .`) before
 type-checking.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same three checks on every
+push to `main` and on pull requests, against the pinned Claude Code version.
+None of them needs credentials. `/tdd-eval` is not part of CI: it calls the
+models.
 
 | File | What it holds |
 |---|---|
