@@ -20,6 +20,7 @@ export const register: Register = (on, options) => {
   const judging = () => task === 'coding'
 
   on('session.start', async ($, e, next) => {
+    for (const problem of config.problems) $.ui.log(`tdd-mod: ${problem}`)
     await $.command.register({
       name: 'tdd-eval',
       description: 'Replays the tdd-mod regression cases through the configured models.',

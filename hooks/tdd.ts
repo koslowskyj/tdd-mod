@@ -19,8 +19,11 @@ export type Verdict = { kind: 'pass' | 'violation'; reason: string }
 
 // Test declarations per language, by extension. A regex stand-in for
 // probity's ast-grep matchers: the module has no Node to run ast-grep.
+// The `testPatterns` setting overrides or extends them per extension.
+export type TestPatterns = Readonly<Record<string, RegExp>>
+
 const JS_TEST = /\b(?:it|test)(?:\.(?:only|skip|todo|concurrent))?\s*\(\s*['"`]/g
-const TEST_PATTERNS: Record<string, RegExp> = {
+export const DEFAULT_TEST_PATTERNS: TestPatterns = {
   ts: JS_TEST, tsx: JS_TEST, mts: JS_TEST, cts: JS_TEST,
   js: JS_TEST, jsx: JS_TEST, mjs: JS_TEST, cjs: JS_TEST,
   py: /^[ \t]*(?:async[ \t]+)?def[ \t]+test\w*[ \t]*\(/gm,
@@ -40,9 +43,14 @@ function countTests(pattern: RegExp, text: string): number {
  * step itself and passes without a model call. Undefined content before the
  * write, or a language without a pattern, never qualifies.
  */
-export function addsExactlyOneTest(path: string, before: FileContent, after: string): boolean {
+export function addsExactlyOneTest(
+  path: string,
+  before: FileContent,
+  after: string,
+  patterns: TestPatterns = DEFAULT_TEST_PATTERNS,
+): boolean {
   if (before.kind === 'unknown') return false
-  const pattern = TEST_PATTERNS[path.slice(path.lastIndexOf('.') + 1).toLowerCase()]
+  const pattern = patterns[path.slice(path.lastIndexOf('.') + 1).toLowerCase()]
   if (pattern === undefined) return false
   const beforeText = before.kind === 'present' ? before.content : ''
   return countTests(pattern, after) - countTests(pattern, beforeText) === 1

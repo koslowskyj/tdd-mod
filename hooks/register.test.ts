@@ -1,7 +1,7 @@
 import type { ModelCompleteResult, On, SessionMessage } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from './task.ts'
-import { globToRegExp, isInScope, readConfig } from './config.ts'
+import { globToRegExp, isInScope, readConfig, readTestPatterns } from './config.ts'
 import { addsExactlyOneTest, applyEdit, buildPrompt, parseVerdict, toHistory, trimHistory } from './tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -118,6 +118,16 @@ describe('tool.call', () => {
     expect(r.deny).toBeUndefined()
     expect(seen.prompts).toEqual([])
     expect(seen.logs.some(l => l.includes('fast path'))).toBe(true)
+  })
+
+  test('a custom test pattern drives the fast path', { options: { testPatterns: '{"ts": "\\\\bscenario\\\\("}' } }, async ($, on) => {
+    const TEST = '/repo/src/cart.spec.ts'
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"asked"}') })
+    const one = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'scenario("adds", () => {})\n' })
+    expect(one.deny).toBeUndefined()
+    expect(seen.prompts).toEqual([])
+    const builtIn = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'test("adds", () => {})\n' })
+    expect(builtIn.deny).toBe('tdd-mod: asked')
   })
 
   test('adding two tests at once goes to the validator', async ($, on) => {
@@ -285,6 +295,26 @@ describe('tdd logic', () => {
     expect(isInScope('/r/main.go', config)).toBe(false)
     expect(isInScope('/r/dist/a.ts', config)).toBe(false)
     expect(isInScope('src/gen/api.ts', config)).toBe(false)
+  })
+
+  test('readTestPatterns overrides, extends and removes per extension', () => {
+    const { patterns, problems } = readTestPatterns('{"ts, .js": "\\\\bscenario\\\\(", "ex": "^\\\\s*test \\"", "go": ""}')
+    expect(problems).toEqual([])
+    expect(addsExactlyOneTest('a.ts', { kind: 'absent' }, 'scenario(1)', patterns)).toBe(true)
+    expect(addsExactlyOneTest('a.ts', { kind: 'absent' }, 'test("x", f)', patterns)).toBe(false)
+    expect(addsExactlyOneTest('a.js', { kind: 'absent' }, 'scenario(1)', patterns)).toBe(true)
+    expect(addsExactlyOneTest('a.ex', { kind: 'absent' }, '  test "adds" do', patterns)).toBe(true)
+    expect(addsExactlyOneTest('a_test.go', { kind: 'absent' }, 'func TestX(t *testing.T) {}', patterns)).toBe(false)
+    expect(addsExactlyOneTest('test_a.py', { kind: 'absent' }, 'def test_x(): pass', patterns)).toBe(true)
+  })
+
+  test('readTestPatterns reports bad values and keeps the built-ins', () => {
+    expect(readTestPatterns('').problems).toEqual([])
+    expect(readTestPatterns('{nope').problems[0]).toContain('not valid JSON')
+    expect(readTestPatterns('["ts"]').problems[0]).toContain('must be a JSON object')
+    const bad = readTestPatterns('{"ts": "("}')
+    expect(bad.problems[0]).toContain('not a valid regex')
+    expect(addsExactlyOneTest('a.ts', { kind: 'absent' }, 'test("x", f)', bad.patterns)).toBe(true)
   })
 
   test('globToRegExp', () => {

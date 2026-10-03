@@ -57,6 +57,12 @@
       "title": "Ignored paths",
       "description": "Comma-separated globs of paths never judged (** any folders, * any name part).",
       "default": "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**"
+    },
+    "testPatterns": {
+      "type": "string",
+      "title": "Test patterns",
+      "description": "Overrides how the fast path recognises a test declaration, per extension: a JSON object from comma-separated extensions to a regex, e.g. {\"ts,js\": \"\\\\bscenario\\\\(\"}. Empty keeps the built-in patterns; an empty regex turns the fast path off for those extensions.",
+      "default": ""
     }
   }
 }

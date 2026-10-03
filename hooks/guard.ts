@@ -48,7 +48,7 @@ export async function decide(
   pending: Pending,
 ): Promise<Decision> {
   // Adding one test is the red step itself.
-  if (config.fastPath && addsExactlyOneTest(pending.path, before, pending.content)) {
+  if (config.fastPath && addsExactlyOneTest(pending.path, before, pending.content, config.testPatterns)) {
     const verdict: Verdict = { kind: 'pass', reason: '' }
     return { verdict, opinions: [verdict], fastPath: true }
   }

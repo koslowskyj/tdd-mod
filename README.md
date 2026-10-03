@@ -91,8 +91,34 @@ Change them in `/config`, or under `pluginConfigs` in `settings.json`. A
 | `secondOpinion` | `true` | Block only when a second judge call agrees. |
 | `extensions` | `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, `cjs`, `py`, `go`, `rs`, `java`, `kt`, `kts`, `scala`, `rb`, `php`, `cs`, `fs`, `swift`, `c`, `cc`, `cpp`, `h`, `hpp`, `ex`, `exs`, `erl`, `clj`, `dart`, `lua`, `ipynb`, `vue`, `svelte` | Comma-separated extensions of the files judged. |
 | `ignore` | `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/vendor/**`, `**/.git/**`, `**/.claude/**` | Comma-separated globs of paths never judged. |
+| `testPatterns` | *(empty: built-in patterns)* | How the fast path recognises a test declaration, per extension. A JSON object from comma-separated extensions to a regex; see below. |
 
 A change in `/config` reloads the mod with the new values.
+
+### Test patterns
+
+The fast path counts test declarations with a regex per file extension. The
+built-in patterns cover `it(`/`test(` in JS/TS, `def test_` in Python,
+`func Test` in Go, `@Test` in Java/Kotlin, `#[test]` in Rust, `it "`/`def test_`
+in Ruby and `[Fact]`/`[Test]` in C#. `testPatterns` replaces or adds patterns
+per extension; an empty regex turns the fast path off for those extensions:
+
+```json
+{
+  "pluginConfigs": {
+    "tdd-mod": {
+      "options": {
+        "testPatterns": "{\"ts,js\": \"\\\\bscenario\\\\(\", \"ex,exs\": \"^\\\\s*test \\\"\", \"go\": \"\"}"
+      }
+    }
+  }
+}
+```
+
+That is the JSON object `{"ts,js": "\\bscenario\\(", "ex,exs": "^\\s*test \"", "go": ""}`
+written as a string. The regexes run with the `g` and `m` flags, so `^` matches
+at each line. An invalid value is reported in the transcript when the session
+starts, and the built-in patterns stay in place.
 
 ## Measuring the judge: `/tdd-eval`
 
