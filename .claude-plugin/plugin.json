@@ -1,0 +1,62 @@
+{
+  "name": "tdd-mod",
+  "version": "0.2.0",
+  "description": "Blocks file writes that break Red-Green-Refactor on coding tasks (port of probity's enforceTdd).",
+  "author": {
+    "name": "koslowskyj",
+    "email": "19502456+koslowskyj@users.noreply.github.com",
+    "url": "https://github.com/koslowskyj"
+  },
+  "repository": "https://github.com/koslowskyj/tdd-mod",
+  "license": "MIT",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "description": "Judge file writes against TDD. Off, the mod does nothing.",
+      "default": true
+    },
+    "judgeModel": {
+      "type": "string",
+      "title": "Judge model",
+      "description": "Judges each file write the agent makes on a coding task: passes it, or blocks it as a TDD violation. It writes no code; the session's own model does. An alias (haiku, sonnet, opus) or a full model id.",
+      "default": "haiku"
+    },
+    "classifierModel": {
+      "type": "string",
+      "title": "Task classifier model",
+      "description": "Labels each prompt you type as coding (writes are judged) or other (nothing is blocked). An alias or a full model id.",
+      "default": "haiku"
+    },
+    "classifyTasks": {
+      "type": "boolean",
+      "title": "Only on coding tasks",
+      "description": "Label each typed prompt coding or other and judge writes only on coding tasks. Off, every task counts as coding.",
+      "default": true
+    },
+    "fastPath": {
+      "type": "boolean",
+      "title": "Pass a single new test",
+      "description": "Pass a write that adds exactly one test without a model call. Faster, but a new test no longer checks for a refactor left unmade.",
+      "default": true
+    },
+    "secondOpinion": {
+      "type": "boolean",
+      "title": "Second opinion",
+      "description": "Block a write only when a second model call agrees with the first violation.",
+      "default": true
+    },
+    "extensions": {
+      "type": "string",
+      "title": "Source file extensions",
+      "description": "Comma-separated extensions of the files judged.",
+      "default": "ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,rb,php,cs,fs,swift,c,cc,cpp,h,hpp,ex,exs,erl,clj,dart,lua,ipynb,vue,svelte"
+    },
+    "ignore": {
+      "type": "string",
+      "title": "Ignored paths",
+      "description": "Comma-separated globs of paths never judged (** any folders, * any name part).",
+      "default": "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**"
+    }
+  }
+}

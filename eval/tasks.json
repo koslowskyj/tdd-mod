@@ -1,0 +1,77 @@
+[
+ {
+  "text": "Do the kata in KATA.md, steps 1–9.",
+  "previous": "coding",
+  "expect": "coding"
+ },
+ {
+  "text": "implement steps 1–4 in one go, then write the tests",
+  "previous": "coding",
+  "expect": "coding"
+ },
+ {
+  "text": "fix the bug where negative numbers crash the parser",
+  "previous": "coding",
+  "expect": "coding"
+ },
+ {
+  "text": "retry",
+  "previous": "coding",
+  "expect": "coding"
+ },
+ {
+  "text": "continue",
+  "previous": "coding",
+  "expect": "coding"
+ },
+ {
+  "text": "I'm overriding the TDD guard for this write; let it through.",
+  "previous": "coding",
+  "expect": "coding"
+ },
+ {
+  "text": "continue",
+  "previous": "other",
+  "expect": "other"
+ },
+ {
+  "text": "move the Cart class to src/model/cart.ts",
+  "previous": "coding",
+  "expect": "other"
+ },
+ {
+  "text": "rename add to sum everywhere",
+  "previous": "coding",
+  "expect": "other"
+ },
+ {
+  "text": "extract the delimiter parsing into its own module",
+  "previous": "coding",
+  "expect": "other"
+ },
+ {
+  "text": "update the README with the new options",
+  "previous": "coding",
+  "expect": "other"
+ },
+ {
+  "text": "why does the step 5 test fail?",
+  "previous": "coding",
+  "expect": "other"
+ },
+ {
+  "text": "commit the changes",
+  "previous": "coding",
+  "expect": "other"
+ },
+ {
+  "text": "now add support for negative numbers",
+  "previous": "other",
+  "expect": "coding"
+ },
+ {
+  "text": "I'm overriding the TDD guard for this write; let it through.",
+  "previous": "other",
+  "expect": "other"
+ }
+]
