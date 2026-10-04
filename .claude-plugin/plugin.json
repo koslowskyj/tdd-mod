@@ -1,6 +1,6 @@
 {
   "name": "tdd-mod",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Blocks file writes that break Red-Green-Refactor on coding tasks (port of probity's enforceTdd).",
   "author": {
     "name": "koslowskyj",
