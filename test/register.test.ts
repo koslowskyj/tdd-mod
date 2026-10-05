@@ -2,7 +2,7 @@ import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage } from 'c
 import { describe, expect, test } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
-import { addsExactlyOneTest, applyEdit, buildPrompt, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
+import { addsExactlyOneTest, applyEdit, buildPrompt, lastTestRun, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const SRC = '/repo/src/cart.ts'
@@ -218,6 +218,19 @@ describe('tool.call', () => {
     expect(prompt).toContain(`File: ${SRC}\n\nexport const total = () => 3`)
     expect(prompt).toContain('User: add a total to the cart')
     expect(prompt).toContain('Bash({"command":"npm test"}) → FAIL expected 3, received 0')
+  })
+
+  test('the validator sees the last test run, red or green, beyond the recent window', async ($, on) => {
+    const reads: SessionMessage = {
+      role: 'assistant',
+      text: '',
+      toolUses: Array.from({ length: 12 }, (_, i) => ({ tool_use_id: `r${i}`, tool: 'Read', input: { file_path: `/repo/f${i}.ts` }, text: '' })),
+    }
+    const seen = engine(on, { messages: [...FAILED_RUN, reads], reply: answer('{"kind":"pass","reason":""}') })
+    await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    expect(seen.prompts[0]).toContain('## Last test run\n\n`npm test` was red: a test failed. Its output:\n\nFAIL expected 3, received 0')
+    expect(seen.prompts[0]).not.toContain('npm test"}) →')
+    expect(seen.prompts[0]).toContain('4. "Last test run"')
   })
 
   test('a new file is shown to the validator as absent', async ($, on) => {
@@ -448,8 +461,26 @@ describe('tdd logic', () => {
       ...FAILED_RUN,
     ])
     expect(history.map(e => e.kind)).toEqual(['prompt', 'tool'])
+    const errored = toHistory([{ role: 'assistant', text: '', toolUses: [{ tool_use_id: 'e', tool: 'Bash', input: {}, text: 'Exit code 1', isError: true }] }])
+    expect(errored).toEqual([{ kind: 'tool', tool: 'Bash', input: {}, output: 'Exit code 1', isError: true }])
     const [clipped] = trimHistory([{ kind: 'prompt', text: 'x'.repeat(100) }], 10, 20)
     expect(clipped).toEqual({ kind: 'prompt', text: `${'x'.repeat(10)}\n[80 more characters truncated]\n${'x'.repeat(10)}` })
+  })
+
+  test('lastTestRun finds the latest test command and reads red or green', () => {
+    const run = (command: string, output: string, isError?: true) => ({ kind: 'tool', tool: 'Bash', input: { command }, output, ...(isError && { isError }) }) as const
+    const passing = run('npm test 2>&1 | tail -30', ' 12 pass\n 0 fail')
+    expect(lastTestRun([passing, run('ls test/', 'a.test.ts')])).toEqual({ command: 'npm test 2>&1 | tail -30', output: ' 12 pass\n 0 fail', red: false })
+    expect(lastTestRun([run('npx vitest run', 'Exit code 1\nFAIL src/a.test.ts', true), { kind: 'prompt', text: 'go on' }])?.red).toBe(true)
+    expect(lastTestRun([passing, run('npm test | tail', '(fail) adds\n 11 pass\n 1 fail')])?.red).toBe(true)
+    const red = (command: string, output: string) => lastTestRun([run(command, output)])?.red
+    expect(red('./mvnw -q test -Dtest=CartIT', 'Tests run: 3, Failures: 1, Errors: 0')).toBe(true)
+    expect(red('mvn verify', 'Tests run: 3, Failures: 0, Errors: 0\nBUILD SUCCESS')).toBe(false)
+    expect(red('python -m pytest -q', '1 failed, 3 passed')).toBe(true)
+    expect(red('go test ./...', 'ok  \tcart\t0.01s')).toBe(false)
+    expect(red('cargo test', "thread 'adds' panicked at src/lib.rs:3")).toBe(true)
+    expect(red('claude plugin test .', ' 47 pass\n 0 fail')).toBe(false)
+    expect(lastTestRun([run('git status', ''), run('cat test/a.ts', 'FAIL')])).toBeUndefined()
   })
 
   test('the prompt leaves out an empty history', () => {

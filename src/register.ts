@@ -4,7 +4,7 @@ import { isInScope, isTestFile, readConfig, type Config } from './config.ts'
 import { runEval } from './eval.ts'
 import { classifyTask, decide, type Complete, type Pending } from './guard.ts'
 import { isGuardInstruction, type TaskKind } from './task.ts'
-import { applyEdit, toHistory, trimHistory, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
+import { applyEdit, toHistory, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
 
 // $.ui.log refuses a line over 4096 characters; leave room for the header.
 const LOG_CHUNK = 3800
@@ -159,9 +159,10 @@ function shown($: EngineInterface, started: number, kind: Verdict['kind'], path:
   $.ui.log(`tdd-mod: ${kind} ${path} (${how}, ${Date.now() - started} ms)`)
 }
 
+/** The agent's whole session: buildPrompt shows its recent part and its last test run. */
 async function recentHistory($: EngineInterface, agentId: string | undefined): Promise<HistoryEvent[]> {
   const messages = await $.session.messages(agentId === undefined ? {} : { agentId })
-  return trimHistory(Array.isArray(messages) ? toHistory(messages) : [])
+  return Array.isArray(messages) ? toHistory(messages) : []
 }
 
 function log($: EngineInterface, verdict: Verdict, pending: Pending, which: string): void {

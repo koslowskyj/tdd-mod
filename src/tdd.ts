@@ -13,7 +13,34 @@ export type FileContent =
 
 export type HistoryEvent =
   | { kind: 'prompt'; text: string }
-  | { kind: 'tool'; tool: string; input: unknown; output: string }
+  | { kind: 'tool'; tool: string; input: unknown; output: string; isError?: true }
+
+/** The latest test command the agent ran, what it printed, and whether it failed. */
+export type TestRun = { command: string; output: string; red: boolean }
+
+// A command that runs tests: a runner's test subcommand, a test runner by name
+// (not a file named after one, like jest.config.js), or a Maven/Gradle build.
+const TEST_COMMAND = new RegExp(
+  [
+    String.raw`\b(?:npm|pnpm|yarn|bun|deno|go|cargo|dotnet|mix|swift|make|plugin)\s+(?:run\s+)?test\b`,
+    String.raw`\b(?:vitest|jest|pytest|mocha|rspec|phpunit|unittest)(?![\w./-])`,
+    String.raw`\b(?:mvnw?|gradlew?)\b.*\b(?:test|verify|install|check|build)\b`,
+  ].join('|'),
+)
+// What a failing run prints, also when a pipe (`| tail`) hid its exit code.
+const RED_OUTPUT =
+  /^Exit code [1-9]|\bFAIL|\b[1-9]\d* (?:fail|failed|failing|failures?|errors?)\b|\b(?:Failures|Errors): [1-9]|\bAssertionError\b|\bpanicked\b/
+
+export function lastTestRun(events: readonly HistoryEvent[]): TestRun | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event?.kind !== 'tool' || event.tool !== 'Bash') continue
+    const command = (event.input as { command?: unknown } | null)?.command
+    if (typeof command !== 'string' || !TEST_COMMAND.test(command)) continue
+    return { command, output: event.output, red: event.isError === true || RED_OUTPUT.test(event.output) }
+  }
+  return undefined
+}
 
 export type Verdict = { kind: 'pass' | 'violation'; reason: string }
 
@@ -85,7 +112,7 @@ export function toHistory(messages: readonly SessionMessage[]): HistoryEvent[] {
     }
     for (const use of message.toolUses) {
       if (use.text === undefined) continue
-      events.push({ kind: 'tool', tool: use.tool, input: use.input, output: use.text })
+      events.push({ kind: 'tool', tool: use.tool, input: use.input, output: use.text, ...(use.isError && { isError: true }) })
     }
   }
   return events
@@ -127,15 +154,24 @@ function formatBefore(before: FileContent): string {
   }
 }
 
+function formatTestRun(run: TestRun): string {
+  const result = run.red ? 'red: a test failed' : 'green: every test passed'
+  return `## Last test run\n\n\`${run.command}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
+}
+
+/** The judge's prompt; `history` is the whole session, of which it shows the recent part and the last test run. */
 export function buildPrompt(
   history: readonly HistoryEvent[],
   before: FileContent,
   action: { path: string; content: string },
 ): string {
   const sections = [PROCESS_INSTRUCTIONS, DEFAULT_TDD_RULES]
-  if (history.length > 0) {
-    sections.push(`## Recent session\n\n${history.map(formatEvent).join('\n')}`)
+  const recent = trimHistory(history)
+  if (recent.length > 0) {
+    sections.push(`## Recent session\n\n${recent.map(formatEvent).join('\n')}`)
   }
+  const run = lastTestRun(history)
+  if (run) sections.push(formatTestRun(run))
   sections.push(`## Current file content\n\n${formatBefore(before)}`)
   sections.push(`## Pending action\n\nFile: ${action.path}\n\n${action.content}`)
   sections.push(RESPONSE_SPEC)

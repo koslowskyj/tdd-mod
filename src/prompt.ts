@@ -2,7 +2,7 @@
 // (https://github.com/nizos/probity, src/rules/enforce-tdd.ts).
 // Copyright (c) Nizar Selander, MIT License.
 // Changed here: RESPONSE_SPEC asks for a reason on "pass" too, so every
-// verdict in the debug log says why.
+// verdict in the debug log says why; the inputs add "Last test run".
 
 export const PROCESS_INSTRUCTIONS = `## Role
 
@@ -11,7 +11,7 @@ test-driven development.
 
 ## Inputs
 
-You will see three inputs:
+You will see these inputs:
 
 1. "Recent session" — a chronological log of the agent's recent prompts
    and tool actions. Each entry shows what the agent did and what it
@@ -22,6 +22,11 @@ You will see three inputs:
    \`(file does not exist)\`) when content cannot be shown.
 3. "Pending action" — what the agent is about to write. Content may be
    raw file text or a patch/diff in any common format.
+4. "Last test run" — the latest test command the agent ran in this
+   session, whether it was red or green, and its output, even when it
+   is older than the recent session. Absent when no test has run yet.
+   A failure shown there is observed: production code that addresses
+   it is the green step.
 
 ## What you judge
 

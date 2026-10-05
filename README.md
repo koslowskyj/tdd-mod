@@ -25,6 +25,9 @@ or process per write.
   The judge sees the last 10 prompts and tool calls of the session, the file as
   it is, and the file as the write would leave it, and answers pass or
   violation.
+- **The judge sees the last test run**, however long ago: its command, whether
+  it was red or green, and its output. So a fix for a failure the agent has
+  already seen is judged as the green step it is.
 - **Only on coding tasks.** Each prompt you type is labelled *coding* (adds,
   changes or fixes behaviour) or *other* (moving or renaming code, extracting,
   formatting, docs, config, questions, git). On *other* nothing is blocked. The
@@ -250,6 +253,12 @@ manual.
   file is still blocked and sent to Write/Edit.
 - **One new test always passes**, so the check for a refactor left unmade after
   green is skipped (turn off `fastPath` to get it back).
+- **A test run is recognised by its command**: a runner's `test` subcommand
+  (`npm test`, `go test`, `cargo test`, `claude plugin test`, …), a runner by
+  name (`vitest`, `jest`, `pytest`, …) or a Maven/Gradle build. A project
+  script (`./check_all.sh`) is not one. It counts as red when the command
+  failed or its output reads like a failure (`FAIL`, `1 failed`,
+  `Failures: 2`, `AssertionError`, `panicked`), green otherwise.
 
 ## Credits
 
