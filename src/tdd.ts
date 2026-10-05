@@ -29,7 +29,7 @@ const TEST_COMMAND = new RegExp(
 )
 // What a failing run prints, also when a pipe (`| tail`) hid its exit code.
 const RED_OUTPUT =
-  /^Exit code [1-9]|\bFAIL|\b[1-9]\d* (?:fail|failed|failing|failures?|errors?)\b|\b(?:Failures|Errors): [1-9]|\bAssertionError\b|\bpanicked\b/
+  /^Exit code [1-9]|\bFAIL|\b[1-9]\d* (?:fail|failed|failing|failures?|errors?)\b|\b(?:Failures|Errors): [1-9]|^# fail [1-9]|^not ok \d|\bAssertionError\b|\bpanicked\b/m
 
 export function lastTestRun(events: readonly HistoryEvent[]): TestRun | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
@@ -154,9 +154,19 @@ function formatBefore(before: FileContent): string {
   }
 }
 
+// Under green the judge denied an unused field's removal and a helper
+// extraction; say outright that such changes are the refactor step.
+const GREEN_REFACTOR =
+  'The tests are green, so this may be the refactor step. A change that keeps ' +
+  'behaviour passes without a new failing test: extracting a helper from code ' +
+  'that already exists, inlining, renaming, restructuring, or removing unused ' +
+  'code (a field, an import, a function nothing calls). Block it only when it ' +
+  'adds behaviour that no test drove.'
+
 function formatTestRun(run: TestRun): string {
   const result = run.red ? 'red: a test failed' : 'green: every test passed'
-  return `## Last test run\n\n\`${run.command}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
+  const output = `## Last test run\n\n\`${run.command}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
+  return run.red ? output : `${output}\n\n${GREEN_REFACTOR}`
 }
 
 /** The judge's prompt; `history` is the whole session, of which it shows the recent part and the last test run. */

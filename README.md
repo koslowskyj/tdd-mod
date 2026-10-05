@@ -28,6 +28,10 @@ or process per write.
 - **The judge sees the last test run**, however long ago: its command, whether
   it was red or green, and its output. So a fix for a failure the agent has
   already seen is judged as the green step it is.
+- **Refactors pass while green.** When the last test run was green, the judge
+  is told that this may be the refactor step: extracting a helper from existing
+  code, inlining, renaming, or removing unused code passes without a new
+  failing test, unless the change adds behaviour.
 - **Only on coding tasks.** Each prompt you type is labelled *coding* (adds,
   changes or fixes behaviour) or *other* (moving or renaming code, extracting,
   formatting, docs, config, questions, git). On *other* nothing is blocked. The
@@ -157,8 +161,9 @@ starts, and the built-in patterns stay in place.
 
 ## Measuring the judge: `/tdd-eval`
 
-`eval/` holds a small regression set built from kata runs: 20 labelled writes
-(`verdicts.json`) and 15 labelled prompts (`tasks.json`). `/tdd-eval [runs]`
+`eval/` holds a small regression set built from kata runs and a guarded
+implementation run: 23 labelled writes (`verdicts.json`) and 15 labelled
+prompts (`tasks.json`). `/tdd-eval [runs]`
 replays them through exactly the decisions a session makes, with the
 configured models, and reports the hit rate per case:
 

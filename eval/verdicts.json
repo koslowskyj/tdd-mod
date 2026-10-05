@@ -1848,5 +1848,205 @@
    "path": "src/calculator.ts",
    "content": "const MAX_NUMBER = 1000;\n\nconst escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n\nconst DEFAULT_SEPARATORS = [\",\", \"\\n\"];\n\nfunction parseInput(numbers: string): { separators: string[]; body: string } {\n  const header = numbers.match(/^\\/\\/(?:\\[(.+)\\]|(.))\\n/);\n  if (!header) return { separators: DEFAULT_SEPARATORS, body: numbers };\n  const custom = header[1]?.split(\"][\") ?? [header[2]];\n  return {\n    separators: [...DEFAULT_SEPARATORS, ...custom],\n    body: numbers.slice(header[0].length),\n  };\n}\n\nexport function add(numbers: string): number {\n  if (numbers === \"\") return 0;\n\n  const { separators, body } = parseInput(numbers);\n  const splitter = new RegExp(separators.map(escapeRegExp).join(\"|\"));\n  const values = body.split(splitter).map(Number);\n  const negatives = values.filter((n) => n < 0);\n  if (negatives.length > 0) {\n    throw new Error(`negatives not allowed: ${negatives.join(\", \")}`);\n  }\n  return values.filter((n) => n <= MAX_NUMBER).reduce((sum, n) => sum + n, 0);\n}\n"
   }
+ },
+ {
+  "name": "guarded run: refactor under green, remove an unused LOG field",
+  "expect": "pass",
+  "why": "The last test run is green and the write only removes a field and its import that nothing uses: deleting dead code is a refactor and needs no failing test.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Reject a webhook whose name is blank with 400."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "./mvnw -q test -Dtest=WebhookIT",
+     "description": "Run the webhook tests"
+    },
+    "output": "[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0\n[INFO] BUILD SUCCESS"
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "grep -n LOG src/main/java/app/WebhookService.java",
+     "description": "Find uses of LOG"
+    },
+    "output": "9:    private static final Logger LOG = Logger.getLogger(WebhookService.class);"
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "package app;\n\nimport org.jboss.logging.Logger;\n\npublic class WebhookService {\n\n    private final WebhookRepository repository;\n\n    private static final Logger LOG = Logger.getLogger(WebhookService.class);\n\n    WebhookService(WebhookRepository repository) {\n        this.repository = repository;\n    }\n\n    Webhook create(String name) {\n        if (name == null || name.isBlank()) throw new BadRequestException(\"name must not be blank\");\n        return repository.save(new Webhook(name));\n    }\n}\n"
+  },
+  "pending": {
+   "path": "src/main/java/app/WebhookService.java",
+   "content": "package app;\n\npublic class WebhookService {\n\n    private final WebhookRepository repository;\n\n    WebhookService(WebhookRepository repository) {\n        this.repository = repository;\n    }\n\n    Webhook create(String name) {\n        if (name == null || name.isBlank()) throw new BadRequestException(\"name must not be blank\");\n        return repository.save(new Webhook(name));\n    }\n}\n"
+  }
+ },
+ {
+  "name": "guarded run: green for a 400 failure observed beyond the recent window",
+  "expect": "pass",
+  "why": "The new test failed on its assertion (expected 400, got 201) and the agent then read eleven files; the minimal check that answers that failure is the green step.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Reject a webhook whose name is blank with 400."
+   },
+   {
+    "kind": "tool",
+    "tool": "Edit",
+    "input": {
+     "file_path": "src/test/java/app/WebhookIT.java",
+     "old_string": "    @Test\n    void createsAWebhook() {",
+     "new_string": "    @Test\n    void rejectsABlankName() {\n        given().body(\"{\\\"name\\\":\\\" \\\"}\").post(\"/webhooks\").then().statusCode(400);\n    }\n\n    @Test\n    void createsAWebhook() {"
+    },
+    "output": "The file src/test/java/app/WebhookIT.java has been updated successfully."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "./mvnw -q test -Dtest=WebhookIT",
+     "description": "Run the webhook tests"
+    },
+    "output": "Exit code 1\n[ERROR] Failures: \n[ERROR]   WebhookIT.rejectsABlankName:31 1 expectation failed.\nExpected status code <400> but was <201>.\n[ERROR] Tests run: 5, Failures: 1, Errors: 0, Skipped: 0\n[INFO] BUILD FAILURE",
+    "isError": true
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/WebhookResource.java"
+    },
+    "output": "@Path(\"/webhooks\") public class WebhookResource { @POST public Response create(CreateWebhook body) { return Response.status(201).entity(service.create(body.name())).build(); } }"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/Webhook.java"
+    },
+    "output": "public record Webhook(String name) {}"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/CreateWebhook.java"
+    },
+    "output": "public record CreateWebhook(String name) {}"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/WebhookRepository.java"
+    },
+    "output": "public interface WebhookRepository { Webhook save(Webhook webhook); }"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/BadRequestException.java"
+    },
+    "output": "public class BadRequestException extends WebApplicationException { public BadRequestException(String message) { super(message, 400); } }"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/ErrorMapper.java"
+    },
+    "output": "@Provider public class ErrorMapper implements ExceptionMapper<WebApplicationException> { }"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/resources/application.properties"
+    },
+    "output": "quarkus.http.port=8080"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/test/java/app/TestData.java"
+    },
+    "output": "final class TestData { static final String NAME = \"orders\"; }"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/package-info.java"
+    },
+    "output": "package app;"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "pom.xml"
+    },
+    "output": "<project><artifactId>app</artifactId></project>"
+   },
+   {
+    "kind": "tool",
+    "tool": "Read",
+    "input": {
+     "file_path": "src/main/java/app/WebhookService.java"
+    },
+    "output": "public class WebhookService { Webhook create(String name) { return repository.save(new Webhook(name)); } }"
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "package app;\n\npublic class WebhookService {\n\n    private final WebhookRepository repository;\n\n    WebhookService(WebhookRepository repository) {\n        this.repository = repository;\n    }\n\n    Webhook create(String name) {\n        return repository.save(new Webhook(name));\n    }\n}\n"
+  },
+  "pending": {
+   "path": "src/main/java/app/WebhookService.java",
+   "content": "package app;\n\npublic class WebhookService {\n\n    private final WebhookRepository repository;\n\n    WebhookService(WebhookRepository repository) {\n        this.repository = repository;\n    }\n\n    Webhook create(String name) {\n        if (name.isBlank()) throw new BadRequestException(\"name must not be blank\");\n        return repository.save(new Webhook(name));\n    }\n}\n"
+  }
+ },
+ {
+  "name": "guarded run: function body before a stub-first assertion red",
+  "expect": "violation",
+  "why": "The only test run failed on a missing module, not on an assertion; the next step is a placeholder stub, and this write implements the behaviour instead.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Do the kata in KATA.md, steps 1–9."
+   },
+   {
+    "kind": "tool",
+    "tool": "Write",
+    "input": {
+     "file_path": "src/calculator.test.ts",
+     "content": "import { test } from \"node:test\";\nimport assert from \"node:assert/strict\";\nimport { add } from \"./calculator.ts\";\n\ntest(\"an empty string returns 0\", () => {\n  assert.equal(add(\"\"), 0);\n});\n"
+    },
+    "output": "File created successfully at: src/calculator.test.ts"
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "npm test 2>&1 | tail -12",
+     "description": "Run the tests"
+    },
+    "output": "#   code: 'ERR_MODULE_NOT_FOUND',\n#   url: 'file://src/calculator.ts'\n# }\nnot ok 1 - src/calculator.test.ts\n  ---\n  failureType: 'testCodeFailure'\n  error: 'test failed'\n  ...\n1..1\n# tests 1\n# pass 0\n# fail 1"
+   }
+  ],
+  "before": {
+   "kind": "absent"
+  },
+  "pending": {
+   "path": "src/calculator.ts",
+   "content": "export function add(numbers: string): number {\n  if (numbers === \"\") return 0;\n  return numbers.split(/[,\\n]/).map(Number).reduce((sum, n) => sum + n, 0);\n}\n"
+  }
  }
 ]

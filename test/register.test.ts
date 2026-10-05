@@ -480,7 +480,17 @@ describe('tdd logic', () => {
     expect(red('go test ./...', 'ok  \tcart\t0.01s')).toBe(false)
     expect(red('cargo test', "thread 'adds' panicked at src/lib.rs:3")).toBe(true)
     expect(red('claude plugin test .', ' 47 pass\n 0 fail')).toBe(false)
+    expect(red('npm test 2>&1 | tail -30', 'not ok 1 - src/a.test.ts\n# pass 0\n# fail 1')).toBe(true)
+    expect(red('npm test 2>&1 | tail -30', 'ok 1 - src/a.test.ts\n# pass 1\n# fail 0')).toBe(false)
     expect(lastTestRun([run('git status', ''), run('cat test/a.ts', 'FAIL')])).toBeUndefined()
+  })
+
+  test('after a green run the prompt lets behaviour-preserving changes pass', () => {
+    const after = (output: string) =>
+      buildPrompt([{ kind: 'tool', tool: 'Bash', input: { command: 'npm test' }, output }], { kind: 'unknown' }, { path: 'a.ts', content: 'x' })
+    const REFACTOR = 'The tests are green, so this may be the refactor step'
+    expect(after(' 3 pass\n 0 fail')).toContain(REFACTOR)
+    expect(after('FAIL a.test.ts')).not.toContain(REFACTOR)
   })
 
   test('the prompt leaves out an empty history', () => {
