@@ -147,6 +147,33 @@ keyed `tdd-mod@tdd-mod`; loaded with `--plugin-dir`, `tdd-mod` (or
 
 A change in `/config` reloads the mod with the new values.
 
+### Judging SQL, YAML and JSON
+
+`.sql`, `.yaml`, `.yml` and `.json` are not judged by default. Most writes to
+them are configuration (`package.json`, `tsconfig.json`, CI workflows,
+settings files), which the guard leaves alone on purpose: judging them would
+block config changes for want of a failing test. That is the kind of false
+positive that costs the most time. Golden files under a test folder count as
+tests and pass anyway.
+
+Where such files carry behaviour, such as a Flyway migration or an
+`openapi.yaml` the code is generated from, add them to `extensions`. Then
+every write to them is judged like source, config files included, unless an
+`ignore` glob leaves those out:
+
+```json
+{
+  "pluginConfigs": {
+    "tdd-mod@tdd-mod": {
+      "options": {
+        "extensions": "ts,tsx,js,java,kt,py,go,sql,yaml,yml,json",
+        "ignore": "**/node_modules/**,**/.git/**,**/.claude/**,**/package.json,**/tsconfig.json,**/.github/**"
+      }
+    }
+  }
+}
+```
+
 ### Test patterns
 
 The fast path counts test declarations with a regex per file extension. The

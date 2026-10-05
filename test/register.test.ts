@@ -221,6 +221,24 @@ describe('tool.call', () => {
     expect(seen.prompts).toEqual([])
   })
 
+  const MIGRATION = '/repo/src/main/resources/db/migration/V2__add_name.sql'
+  const OPENAPI = '/repo/api/openapi.yaml'
+
+  test('SQL, YAML and JSON are not judged by default', async ($, on) => {
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"never asked"}') })
+    await $.tool.call({ tool: 'Write', file_path: MIGRATION, content: 'alter table x add name text;' })
+    await $.tool.call({ tool: 'Write', file_path: OPENAPI, content: 'openapi: 3.1.0' })
+    await $.tool.call({ tool: 'Write', file_path: '/repo/package.json', content: '{}' })
+    expect(seen.prompts).toEqual([])
+  })
+
+  test('adding sql, yaml, yml and json to extensions judges them', { options: { extensions: 'ts,sql,yaml,yml,json' } }, async ($, on) => {
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    const migration = await $.tool.call({ tool: 'Write', file_path: MIGRATION, content: 'alter table x add name text;' })
+    const api = await $.tool.call({ tool: 'Write', file_path: OPENAPI, content: 'openapi: 3.1.0' })
+    expect([migration.deny, api.deny]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+  })
+
   test('files out of scope skip the validator', async ($, on) => {
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"never asked"}') })
     await $.tool.call({ tool: 'Write', file_path: '/repo/README.md', content: '# hi' })
