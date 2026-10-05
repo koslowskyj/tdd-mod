@@ -108,9 +108,15 @@ export function readConfig(options: PluginOptions): Config {
 const TEST_FILE =
   /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.\w+$|[a-z0-9](?:Test|IT)\.(?:java|kt)$|(?:^|\/)test_\w+\.py$|_test\.(?:py|go)$/
 
-/** Whether `path` is a test file: writing one is the red step, never judged. */
-export function isTestFile(path: string): boolean {
-  return TEST_FILE.test(path.replace(/\\/g, '/'))
+/**
+ * Whether `path` is a test file: writing one is the red step, never judged.
+ * Only the part below the project `root` counts, so a checkout that lives in
+ * a folder named test is not all tests.
+ */
+export function isTestFile(path: string, root = ''): boolean {
+  const posix = path.replace(/\\/g, '/')
+  const base = root.replace(/\\/g, '/').replace(/\/$/, '')
+  return TEST_FILE.test(base !== '' && posix.startsWith(`${base}/`) ? posix.slice(base.length + 1) : posix)
 }
 
 /** Source files the guard judges: a listed extension, outside every ignored path. */

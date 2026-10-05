@@ -221,6 +221,16 @@ describe('tool.call', () => {
     expect(seen.prompts).toEqual([])
   })
 
+  test('a project checked out under a folder named test is still judged', async ($, on) => {
+    const ROOT = '/home/u/test/shop'
+    on('session.root', () => ({ value: ROOT }))
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    const source = await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/cart.ts`, content: 'x' })
+    const test = await $.tool.call({ tool: 'Write', file_path: `${ROOT}/test/cart.ts`, content: 'x' })
+    expect([source.deny, test.deny]).toEqual(['tdd-mod: no failing test', undefined])
+    expect(seen.prompts.length).toBe(2)
+  })
+
   const MIGRATION = '/repo/src/main/resources/db/migration/V2__add_name.sql'
   const OPENAPI = '/repo/api/openapi.yaml'
 
@@ -574,7 +584,10 @@ describe('tdd logic', () => {
     ]
     const sources = ['/r/src/cart.ts', '/r/src/testing.ts', '/r/src/contest/a.ts', '/r/a/Latest.java', '/r/a/Cartest.java', '/r/attest.py', '/r/src/protest_x.py']
     expect(tests.filter(p => !isTestFile(p))).toEqual([])
-    expect(sources.filter(isTestFile)).toEqual([])
+    expect(sources.filter(p => isTestFile(p))).toEqual([])
+    // Only the part below the project root counts: a checkout under ~/test/ is no test folder.
+    expect(isTestFile('/home/u/test/shop/src/cart.ts', '/home/u/test/shop')).toBe(false)
+    expect(isTestFile('/home/u/test/shop/test/cart.ts', '/home/u/test/shop')).toBe(true)
   })
 
   test('readTestPatterns overrides, extends and removes per extension', () => {

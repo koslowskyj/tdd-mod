@@ -43,8 +43,6 @@ export const register: Register = (on, options) => {
   const config = readConfig(options)
   if (!config.enabled) return
   const inScope = (path: string) => isInScope(path, config)
-  // The writes the guard judges: source files in scope, not tests (a test is the red step).
-  const judged = (path: string) => inScope(path) && !isTestFile(path)
 
   // The main session's task kind, from the latest typed prompt. Starts as
   // coding, also after a reload, so the guard is on until a prompt says otherwise.
@@ -128,22 +126,26 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
-    if (isTestFile(e.file_path)) {
+    const root = await projectRoot($)
+    if (isTestFile(e.file_path, root)) {
       shown($, Date.now(), 'pass', e.file_path, 'test file')
       return next(e)
     }
     const call: WriteCall = { tool: 'Write', file_path: e.file_path, content: e.content }
+    const judged = (path: string) => inScope(path) && !isTestFile(path, root)
     const verdict = await judgeCall($, config, verdicts, steps.get(e.agentId ?? ''), judged, e.agentId, call)
     return verdict?.kind === 'violation' ? { deny: denial(verdict) } : next(e)
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
-    if (isTestFile(e.file_path)) {
+    const root = await projectRoot($)
+    if (isTestFile(e.file_path, root)) {
       shown($, Date.now(), 'pass', e.file_path, 'test file')
       return next(e)
     }
     const call: WriteCall = { tool: 'Edit', file_path: e.file_path, old_string: e.old_string, new_string: e.new_string, replace_all: e.replace_all }
+    const judged = (path: string) => inScope(path) && !isTestFile(path, root)
     const verdict = await judgeCall($, config, verdicts, steps.get(e.agentId ?? ''), judged, e.agentId, call)
     return verdict?.kind === 'violation' ? { deny: denial(verdict) } : next(e)
   })
@@ -179,6 +181,15 @@ async function readBefore($: EngineInterface, path: string): Promise<FileContent
     return { kind: 'present', content: await $.fs.read(path) }
   } catch {
     return { kind: 'unknown' }
+  }
+}
+
+/** The project root, so a test folder is told apart from the folder the checkout lives in; '' when unknown. */
+async function projectRoot($: EngineInterface): Promise<string> {
+  try {
+    return await $.session.root()
+  } catch {
+    return ''
   }
 }
 
