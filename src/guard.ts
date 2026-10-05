@@ -3,7 +3,7 @@
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
 import type { Config } from './config.ts'
 import { buildTaskPrompt, parseTaskKind, type TaskKind } from './task.ts'
-import { addsExactlyOneTest, buildPrompt, parseVerdict, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
+import { addsExactlyOneTest, buildPrompt, parseVerdict, type Change, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
 
 const TIMEOUT_MS = 120_000
 
@@ -39,6 +39,7 @@ export type Decision = {
 /**
  * The guard's decision on one write, as a session makes it and /tdd-eval
  * replays it: the fast path, then the verdict model, then a second opinion.
+ * `also`: the other files the write's batch changes, judged with it.
  */
 export async function decide(
   complete: Complete,
@@ -46,13 +47,14 @@ export async function decide(
   history: () => Promise<HistoryEvent[]>,
   before: FileContent,
   pending: Pending,
+  also: readonly Change[] = [],
 ): Promise<Decision> {
   // Adding one test is the red step itself.
-  if (config.fastPath && addsExactlyOneTest(pending.path, before, pending.content, config.testPatterns)) {
+  if (also.length === 0 && config.fastPath && addsExactlyOneTest(pending.path, before, pending.content, config.testPatterns)) {
     const verdict: Verdict = { kind: 'pass', reason: '' }
     return { verdict, opinions: [verdict], fastPath: true }
   }
-  const prompt = buildPrompt(await history(), before, pending)
+  const prompt = buildPrompt(await history(), before, pending, also)
   const first = await ask(complete, config, prompt)
   if (first.kind === 'pass' || !config.secondOpinion) return { verdict: first, opinions: [first], fastPath: false, prompt }
   // A single validator call misfires now and then: block only when a second

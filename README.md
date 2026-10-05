@@ -25,6 +25,13 @@ or process per write.
   The judge sees the last 10 prompts and tool calls of the session, the file as
   it is, and the file as the write would leave it, and answers pass or
   violation.
+- **Judges the writes of one response together.** When the agent sends several
+  Write/Edit calls in one response (a method and its call, a signature and its
+  caller in another file), the judge sees every file as they leave it
+  together, once; each write of the batch gets that one verdict. Claude Code
+  starts running a response's tools before the response has finished
+  streaming, so the first write waits for the rest of it, up to 3 s, and is
+  judged alone if it takes longer.
 - **The judge sees the last test run**, however long ago: its command, whether
   it was red or green, and its output. So a fix for a failure the agent has
   already seen is judged as the green step it is.
@@ -229,13 +236,14 @@ manual.
 | `.claude-plugin/plugin.json` | The plugin manifest: name, version, settings |
 | `.claude-plugin/marketplace.json` | Makes this repository a marketplace that lists the plugin |
 | `hooks/hooks.json` | Points Claude Code at `src/register.ts` |
-| `src/register.ts` | The hooks: prompt and subagent-brief classification, the write and Bash guards, `/tdd-eval` |
+| `src/register.ts` | The hooks: prompt and subagent-brief classification, response batches, the write and Bash guards, the verdict cache, `/tdd-eval` |
 | `src/guard.ts` | The two decisions: task kind, and pass/violation for a write |
 | `src/prompt.ts` | The judge's TDD rules, ported from probity |
-| `src/tdd.ts` | Prompt building, session history, applying an Edit, the one-new-test check |
+| `src/tdd.ts` | Prompt building, session history, the last test run, applying an Edit, the one-new-test check |
+| `src/batch.ts` | Which writes of a response form a batch, and the files they leave |
 | `src/task.ts` | The task classifier prompt and the guard-override rule |
 | `src/bash.ts` | Which source files a shell command would write |
-| `src/config.ts` | Settings, globs, which files are in scope |
+| `src/config.ts` | Settings, globs, which files are in scope, which are tests |
 | `src/eval.ts` | The `/tdd-eval` runner |
 | `test/` | Unit and hook tests, run by `claude plugin test .` |
 | `eval/` | The regression cases |
@@ -264,6 +272,10 @@ manual.
   file is still blocked and sent to Write/Edit.
 - **One new test always passes**, so the check for a refactor left unmade after
   green is skipped (turn off `fastPath` to get it back).
+- **Only one response is a batch.** A change the agent spreads over consecutive
+  responses (the method now, its call next turn) is still judged one write at
+  a time. Test files in a response are not part of its batch; they pass on
+  their own.
 - **Only identical retries are stable.** Two equivalent edits to sibling files
   are judged separately and can still get opposite verdicts. The verdict cache
   starts over when the mod reloads.

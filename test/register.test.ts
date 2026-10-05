@@ -1,5 +1,5 @@
-import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage } from 'claude-code'
-import { describe, expect, test } from 'claude-code/testing'
+import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage, TurnStepToolUse } from 'claude-code'
+import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
 import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
@@ -54,10 +54,12 @@ function engine(on: On, world: World) {
   })
   on('tool.call', { tool: 'Write' }, ($, e) => {
     seen.written.push(e.file_path)
+    files[e.file_path] = e.content
     return { result: { type: 'create', filePath: e.file_path, content: e.content, structuredPatch: [], originalFile: null } }
   })
   on('tool.call', { tool: 'Edit' }, ($, e) => {
     seen.written.push(e.file_path)
+    files[e.file_path] = (files[e.file_path] ?? '').replace(e.old_string, () => e.new_string)
     return { result: { filePath: e.file_path, oldString: e.old_string, newString: e.new_string, originalFile: '', structuredPatch: [], userModified: false, replaceAll: false } }
   })
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
@@ -377,6 +379,122 @@ describe('subagents', () => {
     await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-1', agentId, reason: 'answer' })
     const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
     expect(r.deny).toBe('tdd-mod: no failing test')
+  })
+})
+
+/** A tool call as a model response lists it. */
+const use = ({ tool, ...input }: { tool: string } & Record<string, unknown>): TurnStepToolUse => ({ name: tool, input })
+
+/** Streams a model response that asks for `uses` through the plugins, as the engine does before running them. */
+async function respond($: Engine, on: On, uses: TurnStepToolUse[]) {
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: uses, stopReason: 'tool_use', usage: null }
+  })
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'opus', messageCount: 1 })
+  for await (const _ of stream);
+  return stream.result
+}
+
+describe('batches', () => {
+  const CART = 'class Cart {\n}\nconst cart = new Cart()\n'
+  const addMethod = { tool: 'Edit', file_path: SRC, old_string: '{\n}', new_string: '{\n  total() { return 3 }\n}' } as const
+  const addCall = { tool: 'Edit', file_path: SRC, old_string: 'new Cart()\n', new_string: 'new Cart()\ncart.total()\n' } as const
+
+  test('edits sent in one response are judged once, on the file they leave together', async ($, on) => {
+    const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
+    await respond($, on, [use(addMethod), use(addCall)])
+    const first = await $.tool.call(addMethod)
+    const second = await $.tool.call(addCall)
+    expect([first.deny, second.deny]).toEqual([undefined, undefined])
+    expect(seen.prompts.length).toBe(1)
+    expect(seen.prompts[0]).toContain(`File: ${SRC}\n\nclass Cart {\n  total() { return 3 }\n}\nconst cart = new Cart()\ncart.total()\n`)
+  })
+
+  test('a signature change and its caller in another file are judged together', async ($, on) => {
+    const CALLER = '/repo/src/checkout.ts'
+    const signature = { tool: 'Edit', file_path: SRC, old_string: 'total()', new_string: 'total(tax: number)' } as const
+    const caller = { tool: 'Edit', file_path: CALLER, old_string: 'cart.total()', new_string: 'cart.total(0.2)' } as const
+    const seen = engine(on, {
+      files: { [SRC]: 'class Cart { total() { return 3 } }\n', [CALLER]: 'pay(cart.total())\n' },
+      reply: answer('{"kind":"violation","reason":"no failing test"}'),
+    })
+    await respond($, on, [use(signature), use(caller)])
+    const first = await $.tool.call(signature)
+    const second = await $.tool.call(caller)
+    expect([first.deny, second.deny]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+    expect(seen.prompts.length).toBe(2)
+    expect(seen.prompts[0]).toContain(`File: ${SRC}\n\nclass Cart { total(tax: number) { return 3 } }\n`)
+    expect(seen.prompts[0]).toContain(`File: ${CALLER}\n\npay(cart.total(0.2))\n`)
+    expect(seen.prompts[0]).toContain('sent together in one response')
+  })
+
+  // The real catch of the guarded run: an implementation written while the
+  // only red was an import error, not an assertion. It must still reach the
+  // judge, alone or sent beside its test, and its violation must deny it.
+  const CALC = '/repo/src/calculator.ts'
+  const IMPORT_RED: SessionMessage[] = [
+    { role: 'user', text: 'Do the kata in KATA.md', toolUses: [] },
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'npm test' }, text: "Exit code 1\nERR_MODULE_NOT_FOUND './calculator.ts'\nnot ok 1", isError: true }] },
+  ]
+  const body = { tool: 'Write', file_path: CALC, content: 'export const add = (s: string) => s.split(",").map(Number).reduce((a, b) => a + b, 0)\n' } as const
+
+  test('a function body after an import-error red still reaches the judge and is denied', async ($, on) => {
+    const seen = engine(on, { messages: IMPORT_RED, reply: answer('{"kind":"violation","reason":"stub first"}') })
+    const r = await $.tool.call(body)
+    expect(r.deny).toBe('tdd-mod: stub first')
+    expect(seen.prompts[0]).toContain('`npm test` was red: a test failed.')
+    expect(seen.prompts[0]).not.toContain('The tests are green')
+  })
+
+  test('a function body sent beside its test is still judged, and denied', async ($, on) => {
+    const testFile = { tool: 'Write', file_path: '/repo/src/calculator.test.ts', content: 'x' } as const
+    const seen = engine(on, { messages: IMPORT_RED, reply: answer('{"kind":"violation","reason":"stub first"}') })
+    await respond($, on, [use(testFile), use(body)])
+    const red = await $.tool.call(testFile)
+    const green = await $.tool.call(body)
+    expect([red.deny, green.deny]).toEqual([undefined, 'tdd-mod: stub first'])
+    expect(seen.prompts.length).toBe(2)
+  })
+
+  /** A response whose stream ends when the test calls `finish`: the engine runs its tools before that. */
+  function streaming($: Engine, on: On, uses: TurnStepToolUse[]) {
+    let finish = () => {}
+    const ended = new Promise<void>(resolve => (finish = resolve))
+    on('turn.step', async function* ($, e) {
+      await ended
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: uses, stopReason: 'tool_use', usage: null }
+    })
+    const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'opus', messageCount: 1 })
+    const drained = (async () => {
+      for await (const _ of stream);
+    })()
+    return { finish: () => (finish(), drained) }
+  }
+
+  test('a write that runs while its response still streams waits for the whole response', async ($, on) => {
+    const clock = mock.clock(on)
+    const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
+    const response = streaming($, on, [use(addMethod), use(addCall)])
+    await clock.settle()
+    const first = $.tool.call(addMethod)
+    await clock.settle()
+    expect(seen.prompts).toEqual([])
+    await response.finish()
+    expect((await first).deny).toBeUndefined()
+    await $.tool.call(addCall)
+    expect(seen.prompts.length).toBe(1)
+  })
+
+  test('a response that does not end within 3 s leaves the write to be judged alone', async ($, on) => {
+    const clock = mock.clock(on)
+    const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
+    const response = streaming($, on, [use(addMethod), use(addCall)])
+    await clock.settle()
+    const first = $.tool.call(addMethod)
+    await clock.advance(3000)
+    expect((await first).deny).toBeUndefined()
+    expect(seen.prompts[0]).toContain(`File: ${SRC}\n\nclass Cart {\n  total() { return 3 }\n}\nconst cart = new Cart()\n\n`)
+    await response.finish()
   })
 })
 

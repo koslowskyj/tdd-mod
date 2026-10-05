@@ -184,6 +184,7 @@ export function buildPrompt(
   history: readonly HistoryEvent[],
   before: FileContent,
   action: { path: string; content: string },
+  also: readonly Change[] = [],
 ): string {
   const sections = [PROCESS_INSTRUCTIONS, DEFAULT_TDD_RULES]
   const recent = trimHistory(history)
@@ -192,11 +193,26 @@ export function buildPrompt(
   }
   const run = lastTestRun(history)
   if (run) sections.push(formatTestRun(run))
-  sections.push(`## Current file content\n\n${formatBefore(before)}`)
-  sections.push(`## Pending action\n\nFile: ${action.path}\n\n${action.content}`)
+  if (also.length === 0) {
+    sections.push(`## Current file content\n\n${formatBefore(before)}`)
+    sections.push(`## Pending action\n\nFile: ${action.path}\n\n${action.content}`)
+  } else {
+    const changes = [{ ...action, before }, ...also]
+    sections.push(`## Current file content\n\n${changes.map(c => `File: ${c.path}\n\n${formatBefore(c.before)}`).join('\n\n')}`)
+    sections.push(
+      `## Pending action\n\n${BATCH_NOTE}\n\n${changes.map(c => `File: ${c.path}\n\n${c.content}`).join('\n\n')}`,
+    )
+  }
   sections.push(RESPONSE_SPEC)
   return sections.join('\n\n')
 }
+
+/** One file a write of a batch changes: as it is, and as the batch leaves it. */
+export type Change = { path: string; before: FileContent; content: string }
+
+const BATCH_NOTE =
+  'These writes were sent together in one response and land together: judge them as one change, ' +
+  'on the files they leave together. The verdict applies to all of them.'
 
 /** Fail-closed: anything but a well-formed verdict is a violation. */
 export function parseVerdict(text: string): Verdict {
