@@ -103,6 +103,16 @@ export function readConfig(options: PluginOptions): Config {
   }
 }
 
+// A test folder (test/, tests/, __tests__/, so src/test/ too) or a test file name:
+// *.test.*, *.spec.*, *Test.java|kt, *IT.java|kt, test_*.py, *_test.py, *_test.go.
+const TEST_FILE =
+  /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.\w+$|[a-z0-9](?:Test|IT)\.(?:java|kt)$|(?:^|\/)test_\w+\.py$|_test\.(?:py|go)$/
+
+/** Whether `path` is a test file: writing one is the red step, never judged. */
+export function isTestFile(path: string): boolean {
+  return TEST_FILE.test(path.replace(/\\/g, '/'))
+}
+
 /** Source files the guard judges: a listed extension, outside every ignored path. */
 export function isInScope(path: string, config: Config): boolean {
   const posix = path.replace(/\\/g, '/')

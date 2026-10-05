@@ -1,7 +1,7 @@
 import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
-import { globToRegExp, isInScope, readConfig, readTestPatterns } from '../src/config.ts'
+import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
 import { addsExactlyOneTest, applyEdit, buildPrompt, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -111,8 +111,9 @@ describe('tool.call', () => {
     expect(parts.map(l => l.slice(l.indexOf(':\n') + 2)).join('')).toBe(seen.prompts[0])
   })
 
+  // Tests written inside a source file (in-source tests) go through the fast path.
   test('adding one test passes without asking the validator', async ($, on) => {
-    const TEST = '/repo/src/cart.test.ts'
+    const TEST = SRC
     const seen = engine(on, {
       files: { [TEST]: 'test("a", () => {})\n' },
       reply: answer('{"kind":"violation","reason":"never asked"}'),
@@ -124,7 +125,7 @@ describe('tool.call', () => {
   })
 
   test('a custom test pattern drives the fast path', { options: { testPatterns: '{"ts": "\\\\bscenario\\\\("}' } }, async ($, on) => {
-    const TEST = '/repo/src/cart.spec.ts'
+    const TEST = SRC
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"asked"}') })
     const one = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'scenario("adds", () => {})\n' })
     expect(one.deny).toBeUndefined()
@@ -134,7 +135,7 @@ describe('tool.call', () => {
   })
 
   test('adding two tests at once goes to the validator', async ($, on) => {
-    const TEST = '/repo/src/cart.test.ts'
+    const TEST = SRC
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"one test at a time"}') })
     const r = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'test("a", () => {})\ntest("b", () => {})\n' })
     expect(r.deny).toBe('tdd-mod: one test at a time')
@@ -173,6 +174,16 @@ describe('tool.call', () => {
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
     expect(r.deny).toContain('could not parse verdict')
     expect(seen.written).toEqual([])
+  })
+
+  test('a write or edit to a test file passes without the validator', async ($, on) => {
+    const TEST = '/repo/src/cart.test.ts'
+    const seen = engine(on, { files: { [TEST]: 'x' }, reply: answer('{"kind":"violation","reason":"never asked"}') })
+    const w = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'x' })
+    const e = await $.tool.call({ tool: 'Edit', file_path: TEST, old_string: 'x', new_string: 'y' })
+    expect(w.deny).toBeUndefined()
+    expect(e.deny).toBeUndefined()
+    expect(seen.prompts).toEqual([])
   })
 
   test('files out of scope skip the validator', async ($, on) => {
@@ -371,6 +382,17 @@ describe('tdd logic', () => {
     expect(isInScope('/r/main.go', config)).toBe(false)
     expect(isInScope('/r/dist/a.ts', config)).toBe(false)
     expect(isInScope('src/gen/api.ts', config)).toBe(false)
+  })
+
+  test('isTestFile knows test folders and test file names', () => {
+    const tests = [
+      '/r/test/register.ts', 'test/a.py', '/r/tests/a.rs', '/r/service/src/test/java/a/Helper.java',
+      '/r/src/__tests__/a.js', '/r/src/a.test.ts', '/r/src/a.spec.tsx', '/r/a/CartTest.java', '/r/a/CartIT.java',
+      '/r/a/CartTest.kt', '/r/app/test_cart.py', '/r/app/cart_test.py', '/r/pkg/cart_test.go',
+    ]
+    const sources = ['/r/src/cart.ts', '/r/src/testing.ts', '/r/src/contest/a.ts', '/r/a/Latest.java', '/r/a/Cartest.java', '/r/attest.py', '/r/src/protest_x.py']
+    expect(tests.filter(p => !isTestFile(p))).toEqual([])
+    expect(sources.filter(isTestFile)).toEqual([])
   })
 
   test('readTestPatterns overrides, extends and removes per extension', () => {

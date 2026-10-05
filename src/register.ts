@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { bashWriteTargets } from './bash.ts'
-import { isInScope, readConfig, type Config } from './config.ts'
+import { isInScope, isTestFile, readConfig, type Config } from './config.ts'
 import { runEval } from './eval.ts'
 import { classifyTask, decide, type Complete, type Pending } from './guard.ts'
 import { isGuardInstruction, type TaskKind } from './task.ts'
@@ -78,14 +78,14 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.file_path) || isTestFile(e.file_path)) return next(e)
     const before = await readBefore($, e.file_path)
     const verdict = await judgeWrite($, config, e.agentId, before, { path: e.file_path, content: e.content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.file_path) || isTestFile(e.file_path)) return next(e)
     const before = await readBefore($, e.file_path)
     if (before.kind !== 'present') return next(e)
     const after = applyEdit(before.content, e.old_string, e.new_string, e.replace_all)

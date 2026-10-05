@@ -37,8 +37,13 @@ or process per write.
 - **Blocks shell writes to source files** (`cat > file`, `>>`, `tee`, `sed -i`,
   `cp`, inline Python/Node writes) and tells the agent to use Write or Edit, so
   every change can be judged. Moving files (`mv`, `git mv`) is allowed.
-- **Passes a write that adds exactly one test** without asking the model:
-  adding a test is the red step itself.
+- **Passes every write to a test file** without asking the model: writing a
+  test is the red step itself. A test file is one in a `test/`, `tests/` or
+  `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`,
+  `*Test.java`/`.kt`, `*IT.java`/`.kt`, `test_*.py`, `*_test.py` or
+  `*_test.go`.
+- **Passes a write that adds exactly one test** to any other file (in-source
+  tests, a Rust `#[test]` module) without asking the model.
 - **Asks a second time before blocking**, and blocks only when both answers
   agree. If the judge can't be reached, the write is blocked (fail-closed).
 - **Respects an explicit override.** Tell the agent *"I'm overriding the TDD
@@ -231,6 +236,10 @@ manual.
   run, or a path built at runtime, gets through.
 - **Judges disagree.** Stronger models are more lenient on the current prompt;
   see the eval table above.
+- **Test files are never judged.** Adding two tests at once, or a new test while
+  the last green left a refactor unmade, goes through in a test file. Fixtures
+  and helpers under a test folder count as tests too. A shell write to a test
+  file is still blocked and sent to Write/Edit.
 - **One new test always passes**, so the check for a refactor left unmade after
   green is skipped (turn off `fastPath` to get it back).
 
