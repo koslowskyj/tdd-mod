@@ -2,7 +2,7 @@ import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage } from 'c
 import { describe, expect, test } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
-import { addsExactlyOneTest, applyEdit, buildPrompt, lastTestRun, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
+import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const SRC = '/repo/src/cart.ts'
@@ -173,6 +173,26 @@ describe('tool.call', () => {
       'tdd-mod: pass /repo/src/cart.test.ts (test file, N ms)',
       'tdd-mod: violation /repo/src/total.ts (second opinion, N ms)',
     ])
+  })
+
+  test('an identical retry with nothing new in the session gets the same verdict without a model call', async ($, on) => {
+    const seen = engine(on, { reply: [answer('{"kind":"violation","reason":"no failing test"}'), answer('{"kind":"violation","reason":"no failing test"}'), answer('{"kind":"pass","reason":""}')] })
+    const first = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    const retry = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    expect(retry.deny).toBe(first.deny)
+    expect(seen.prompts.length).toBe(2)
+    expect(seen.transcript.at(-1)?.replace(/\d+ ms/, 'N ms')).toBe(`tdd-mod: violation ${SRC} (cached, N ms)`)
+  })
+
+  test('a retry after a new test run is judged again, and a reversed verdict is logged', async ($, on) => {
+    const world: World = { messages: FAILED_RUN, reply: [answer('{"kind":"violation","reason":"no failing test"}'), answer('{"kind":"violation","reason":"no failing test"}'), answer('{"kind":"pass","reason":"green"}')] }
+    const seen = engine(on, world)
+    await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    const rerun = { tool_use_id: 't2', tool: 'Bash', input: { command: 'npm test' }, text: 'FAIL expected 4, received 0' }
+    world.messages = [...FAILED_RUN, { role: 'assistant', text: '', toolUses: [rerun] }]
+    const retry = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    expect(retry.deny).toBeUndefined()
+    expect(seen.logs).toContain(`tdd-mod: verdict reversed on retry (violation → pass) ${SRC}`)
   })
 
   test('fails closed when the validator does not answer', async ($, on) => {
@@ -483,6 +503,14 @@ describe('tdd logic', () => {
     expect(red('npm test 2>&1 | tail -30', 'not ok 1 - src/a.test.ts\n# pass 0\n# fail 1')).toBe(true)
     expect(red('npm test 2>&1 | tail -30', 'ok 1 - src/a.test.ts\n# pass 1\n# fail 0')).toBe(false)
     expect(lastTestRun([run('git status', ''), run('cat test/a.ts', 'FAIL')])).toBeUndefined()
+  })
+
+  test('evidenceOf changes with a new test run or prompt, not with other tool calls', () => {
+    const base = toHistory(FAILED_RUN)
+    const read = { kind: 'tool', tool: 'Read', input: {}, output: 'x' } as const
+    expect(evidenceOf([...base, read])).toBe(evidenceOf(base))
+    expect(evidenceOf([...base, { kind: 'prompt', text: 'let it through' }])).not.toBe(evidenceOf(base))
+    expect(evidenceOf([...base, { kind: 'tool', tool: 'Bash', input: { command: 'npm test' }, output: 'ok' }])).not.toBe(evidenceOf(base))
   })
 
   test('after a green run the prompt lets behaviour-preserving changes pass', () => {

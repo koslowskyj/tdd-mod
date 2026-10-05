@@ -53,6 +53,12 @@ or process per write.
   tests, a Rust `#[test]` module) without asking the model.
 - **Asks a second time before blocking**, and blocks only when both answers
   agree. If the judge can't be reached, the write is blocked (fail-closed).
+- **Gives an identical retry the same verdict.** A write to the same file, from
+  the same content to the same content, gets the verdict it got before, without
+  a model call, as long as there is no new evidence: no new test run and no new
+  prompt from you. After new evidence it is judged again; a retry whose verdict
+  flips is logged as `verdict reversed on retry (violation → pass)` in the
+  debug log.
 - **Respects an explicit override.** Tell the agent *"I'm overriding the TDD
   guard for this write; let it through."* and the judge lets that write pass.
 
@@ -258,6 +264,9 @@ manual.
   file is still blocked and sent to Write/Edit.
 - **One new test always passes**, so the check for a refactor left unmade after
   green is skipped (turn off `fastPath` to get it back).
+- **Only identical retries are stable.** Two equivalent edits to sibling files
+  are judged separately and can still get opposite verdicts. The verdict cache
+  starts over when the mod reloads.
 - **A test run is recognised by its command**: a runner's `test` subcommand
   (`npm test`, `go test`, `cargo test`, `claude plugin test`, …), a runner by
   name (`vitest`, `jest`, `pytest`, …) or a Maven/Gradle build. A project

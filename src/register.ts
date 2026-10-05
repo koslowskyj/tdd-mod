@@ -4,10 +4,17 @@ import { isInScope, isTestFile, readConfig, type Config } from './config.ts'
 import { runEval } from './eval.ts'
 import { classifyTask, decide, type Complete, type Pending } from './guard.ts'
 import { isGuardInstruction, type TaskKind } from './task.ts'
-import { applyEdit, toHistory, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
+import { applyEdit, evidenceOf, toHistory, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
 
 // $.ui.log refuses a line over 4096 characters; leave room for the header.
 const LOG_CHUNK = 3800
+
+/**
+ * `byEvidence`: verdicts by write and evidence, so an identical retry with
+ * nothing new gets the same answer; `byWrite`: the latest verdict per write,
+ * to log a retry that reverses it.
+ */
+type Verdicts = { byEvidence: Map<string, Verdict>; byWrite: Map<string, Verdict['kind']> }
 
 export const register: Register = (on, options) => {
   const config = readConfig(options)
@@ -29,6 +36,7 @@ export const register: Register = (on, options) => {
     const n = running.size
     return n === 0 ? main : `${main} · judging ${n} subagent${n === 1 ? '' : 's'}`
   }
+  const verdicts: Verdicts = { byEvidence: new Map(), byWrite: new Map() }
 
   on('session.start', async ($, e, next) => {
     for (const problem of config.problems) $.ui.log(`tdd-mod: ${problem}`)
@@ -84,7 +92,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const before = await readBefore($, e.file_path)
-    const verdict = await judgeWrite($, config, e.agentId, before, { path: e.file_path, content: e.content })
+    const verdict = await judgeWrite($, config, verdicts, e.agentId, before, { path: e.file_path, content: e.content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 
@@ -99,7 +107,7 @@ export const register: Register = (on, options) => {
     const after = applyEdit(before.content, e.old_string, e.new_string, e.replace_all)
     // An edit that cannot apply changes nothing; the Edit tool reports the miss.
     if (after === undefined) return next(e)
-    const verdict = await judgeWrite($, config, e.agentId, before, { path: e.file_path, content: after })
+    const verdict = await judgeWrite($, config, verdicts, e.agentId, before, { path: e.file_path, content: after })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 
@@ -123,7 +131,7 @@ export const register: Register = (on, options) => {
     const content =
       `Notebook cell edit (${mode}) on cell ${e.cell_id ?? '(first)'}` +
       `${e.cell_type ? `, type ${e.cell_type}` : ''}. New cell source:\n\n${e.new_source}`
-    const verdict = await judgeWrite($, config, e.agentId, before, { path: e.notebook_path, content })
+    const verdict = await judgeWrite($, config, verdicts, e.agentId, before, { path: e.notebook_path, content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 }
@@ -140,18 +148,48 @@ async function readBefore($: EngineInterface, path: string): Promise<FileContent
 async function judgeWrite(
   $: EngineInterface,
   config: Config,
+  verdicts: Verdicts,
   agentId: string | undefined,
   before: FileContent,
   pending: Pending,
 ): Promise<Verdict> {
   const started = Date.now()
+  const history = await recentHistory($, agentId)
+  // The write (who, where, from what to what), and that write with the evidence its verdict rests on.
+  const write = `${pending.path} ${hash(JSON.stringify([agentId ?? null, before, pending.content]))}`
+  const key = `${write} ${hash(evidenceOf(history))}`
+  const cached = verdicts.byEvidence.get(key)
+  if (cached) {
+    shown($, started, cached.kind, pending.path, 'cached')
+    return cached
+  }
   const complete: Complete = request => $.model.complete(request)
-  const decision = await decide(complete, config, () => recentHistory($, agentId), before, pending)
+  const decision = await decide(complete, config, async () => history, before, pending)
   const which = (i: number) => (decision.fastPath ? 'fast path: one new test' : i === 0 ? 'first opinion' : 'second opinion')
   decision.opinions.forEach((verdict, i) => log($, verdict, pending, which(i)))
   if (decision.verdict.kind === 'violation' && decision.prompt) logPrompt($, decision.prompt, pending)
   shown($, started, decision.verdict.kind, pending.path, which(decision.opinions.length - 1))
+  const previous = verdicts.byWrite.get(write)
+  if (previous !== undefined && previous !== decision.verdict.kind) {
+    $.ui.log(`tdd-mod: verdict reversed on retry (${previous} → ${decision.verdict.kind}) ${pending.path}`, { to: 'debug' })
+  }
+  verdicts.byEvidence.set(key, decision.verdict)
+  verdicts.byWrite.set(write, decision.verdict.kind)
   return decision.verdict
+}
+
+/** cyrb53: a fast 53-bit string hash, so the verdict cache keeps no file contents. */
+function hash(text: string): number {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 2654435761)
+    h2 = Math.imul(h2 ^ c, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0)
 }
 
 /** One transcript line per decision, passes included, with how it was reached and how long it took. */

@@ -42,6 +42,16 @@ export function lastTestRun(events: readonly HistoryEvent[]): TestRun | undefine
   return undefined
 }
 
+/**
+ * What a verdict rests on besides the write: the last test run and the person's
+ * latest prompt. A retry of the same write with the same evidence gets the same
+ * verdict; a new test run or an override is new evidence.
+ */
+export function evidenceOf(events: readonly HistoryEvent[]): string {
+  const prompt = events.findLast(event => event.kind === 'prompt')
+  return JSON.stringify([lastTestRun(events) ?? null, prompt?.kind === 'prompt' ? prompt.text : null])
+}
+
 export type Verdict = { kind: 'pass' | 'violation'; reason: string }
 
 // Test declarations per language, by extension. A regex stand-in for
