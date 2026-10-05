@@ -29,6 +29,11 @@ or process per write.
   changes or fixes behaviour) or *other* (moving or renaming code, extracting,
   formatting, docs, config, questions, git). On *other* nothing is blocked. The
   status line shows `TDD on` or `TDD off (not coding)`.
+- **Subagents get their own label.** A subagent (the Agent tool) is labelled
+  from the brief it was spawned with, not from your last prompt: one briefed to
+  implement or fix something is judged even when you asked a question or told
+  the agent to delegate; one briefed to explore or review is not. While coding
+  subagents run, the status line adds `· judging 1 subagent` (or `2 subagents`).
 - **Blocks shell writes to source files** (`cat > file`, `>>`, `tee`, `sed -i`,
   `cp`, inline Python/Node writes) and tells the agent to use Write or Edit, so
   every change can be judged. Moving files (`mv`, `git mv`) is allowed.
@@ -72,7 +77,8 @@ tail -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/debug/latest" | grep --line-buffere
 ```
 
 Lines look like `tdd-mod: pass (first opinion) src/cart.ts — Green phase: …`,
-`tdd-mod: violation (second opinion) …` or `tdd-mod: task other: …`. For every
+`tdd-mod: violation (second opinion) …`, `tdd-mod: task other: …` or
+`tdd-mod: subagent <agentId> task coding: …`. For every
 blocked write, the full judge prompt follows in numbered parts
 (`blocked prompt … part 1/3`), so the verdict can be replayed exactly.
 
@@ -98,7 +104,7 @@ keyed `tdd-mod@tdd-mod`; loaded with `--plugin-dir`, `tdd-mod` (or
 |---|---|---|
 | `enabled` | `true` | Off, the mod does nothing. |
 | `judgeModel` | `haiku` | The model that judges each write on a coding task. It writes no code; the session's own model does. Haiku is the default because it scored best in `/tdd-eval`. |
-| `classifierModel` | `haiku` | The model that labels each typed prompt *coding* or *other*. |
+| `classifierModel` | `haiku` | The model that labels each typed prompt and each subagent's brief *coding* or *other*. |
 | `classifyTasks` | `true` | Off, every task counts as coding and every write is judged. |
 | `fastPath` | `true` | Pass a write that adds exactly one test without a model call. Faster, but a new test no longer checks for a refactor left unmade. |
 | `secondOpinion` | `true` | Block only when a second judge call agrees. |
@@ -196,7 +202,7 @@ manual.
 | `.claude-plugin/plugin.json` | The plugin manifest: name, version, settings |
 | `.claude-plugin/marketplace.json` | Makes this repository a marketplace that lists the plugin |
 | `hooks/hooks.json` | Points Claude Code at `src/register.ts` |
-| `src/register.ts` | The hooks: prompt classification, the write and Bash guards, `/tdd-eval` |
+| `src/register.ts` | The hooks: prompt and subagent-brief classification, the write and Bash guards, `/tdd-eval` |
 | `src/guard.ts` | The two decisions: task kind, and pass/violation for a write |
 | `src/prompt.ts` | The judge's TDD rules, ported from probity |
 | `src/tdd.ts` | Prompt building, session history, applying an Edit, the one-new-test check |
@@ -213,6 +219,14 @@ manual.
   changes behaviour, nothing judges it.
 - **After a non-coding prompt, "continue" keeps the guard off.** Name the coding
   task ("now add …") to switch it back on.
+- **A subagent's label holds for its whole life.** A message sent to it later
+  (SendMessage, a resumed agent, a teammate's next task) does not relabel it,
+  and a resumed coding subagent is judged but not counted in the status line.
+- **Subagents spawned before a reload follow the main session's label.** The
+  labels live in the module and start over when the mod reloads (a `/config`
+  change); so do agents no Agent call started, such as a workflow's.
+- **Each subagent spawn waits for one classifier call** before the subagent
+  starts.
 - **Shell writes are caught by pattern.** A script file that is written and then
   run, or a path built at runtime, gets through.
 - **Judges disagree.** Stronger models are more lenient on the current prompt;

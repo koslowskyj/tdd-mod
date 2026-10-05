@@ -25,13 +25,13 @@
     "classifierModel": {
       "type": "string",
       "title": "Task classifier model",
-      "description": "Labels each prompt you type as coding (writes are judged) or other (nothing is blocked). An alias or a full model id.",
+      "description": "Labels each prompt you type, and each subagent's brief, as coding (writes are judged) or other (nothing is blocked). An alias or a full model id.",
       "default": "haiku"
     },
     "classifyTasks": {
       "type": "boolean",
       "title": "Only on coding tasks",
-      "description": "Label each typed prompt coding or other and judge writes only on coding tasks. Off, every task counts as coding.",
+      "description": "Label each typed prompt and each subagent's brief coding or other and judge writes only on coding tasks. Off, every task counts as coding.",
       "default": true
     },
     "fastPath": {

@@ -1,4 +1,4 @@
-import type { ModelCompleteResult, On, SessionMessage } from 'claude-code'
+import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, readConfig, readTestPatterns } from '../src/config.ts'
@@ -60,6 +60,9 @@ function engine(on: On, world: World) {
     return { result: { filePath: e.file_path, oldString: e.old_string, newString: e.new_string, originalFile: '', structuredPatch: [], userModified: false, replaceAll: false } }
   })
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+  let spawned = 0
+  on('agent.spawn', () => ({ model: 'haiku', agentId: `agent-${++spawned}` }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
   return seen
 }
 
@@ -243,6 +246,79 @@ describe('task kind', () => {
     engine(on, { task: ['hmm'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
     await $.prompt.submit({ ...typed, text: 'do the thing' })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    expect(r.deny).toBe('tdd-mod: no failing test')
+  })
+})
+
+/** What the Agent tool hands `agent.spawn` for a subagent briefed with `prompt`. */
+const brief = (prompt: string): AgentSpawnInput => ({
+  tool_use_id: 'toolu_spawn',
+  prompt,
+  description: 'subagent',
+  subagentType: 'general-purpose',
+  provider: { plugin: 'engine', tier: 'core' },
+  parentModel: 'opus',
+  background: true,
+  fork: false,
+})
+
+/** A tool call from the subagent's loop; the test engine carries `agentId` through, though its type leaves it out. */
+const inAgent = <const T extends object>(agentId: string | undefined, args: T): T => ({ ...args, agentId })
+
+describe('subagents', () => {
+  test('a subagent briefed to code is judged while the main task is other', async ($, on) => {
+    engine(on, { task: ['other', 'coding'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    await $.prompt.submit({ ...typed, text: 'spawn an agent that implements the cart total test-first' })
+    const { agentId } = await $.agent.spawn(brief('Implement the cart total test-first.'))
+    const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
+    expect(r.deny).toBe('tdd-mod: no failing test')
+  })
+
+  test('a subagent briefed to explore is not judged while the main task is coding', async ($, on) => {
+    const seen = engine(on, { task: ['coding', 'other'], reply: answer('{"kind":"violation","reason":"never asked"}') })
+    await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
+    const { agentId } = await $.agent.spawn(brief('Find where the cart is priced and report the files.'))
+    const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
+    expect(r.deny).toBeUndefined()
+    expect(seen.prompts).toEqual([])
+  })
+
+  test('with classifyTasks off a subagent is judged without a classifier call', { options: { classifyTasks: false } }, async ($, on) => {
+    const seen = engine(on, { task: ['other'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    const { agentId } = await $.agent.spawn(brief('Find where the cart is priced and report the files.'))
+    const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
+    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(seen.classified).toEqual([])
+  })
+
+  test('the status line counts the subagents being judged', async ($, on) => {
+    const seen = engine(on, { task: ['other', 'coding', 'other'], reply: answer('{"kind":"pass","reason":""}') })
+    await $.prompt.submit({ ...typed, text: 'spawn an agent that implements the cart total test-first' })
+    await $.agent.spawn(brief('Implement the cart total test-first.'))
+    await $.agent.spawn(brief('Review the diff.'))
+    expect(seen.status.at(-1)).toBe('TDD off (not coding) · judging 1 subagent')
+  })
+
+  test('a subagent whose run ended leaves the status line', async ($, on) => {
+    const seen = engine(on, { task: ['other', 'coding'], reply: answer('{"kind":"pass","reason":""}') })
+    await $.prompt.submit({ ...typed, text: 'spawn an agent that implements the cart total test-first' })
+    const { agentId } = await $.agent.spawn(brief('Implement the cart total test-first.'))
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-1', agentId, reason: 'answer' })
+    expect(seen.status.at(-1)).toBe('TDD off (not coding)')
+  })
+
+  test("a subagent's label goes to the debug log", async ($, on) => {
+    const seen = engine(on, { task: ['coding'], reply: answer('{"kind":"pass","reason":""}') })
+    await $.agent.spawn(brief('Implement the cart\ntotal test-first.'))
+    expect(seen.logs).toContain('tdd-mod: subagent agent-1 task coding: Implement the cart total test-first.')
+  })
+
+  test('a subagent resumed after its run ended is still judged by its brief', async ($, on) => {
+    engine(on, { task: ['other', 'coding'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    await $.prompt.submit({ ...typed, text: 'spawn an agent that implements the cart total test-first' })
+    const { agentId } = await $.agent.spawn(brief('Implement the cart total test-first.'))
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-1', agentId, reason: 'answer' })
+    const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
     expect(r.deny).toBe('tdd-mod: no failing test')
   })
 })

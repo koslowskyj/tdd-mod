@@ -14,10 +14,21 @@ export const register: Register = (on, options) => {
   if (!config.enabled) return
   const inScope = (path: string) => isInScope(path, config)
 
-  // The kind of the task at hand, from the latest prompt. Starts as coding,
-  // also after a reload, so the guard is on until a prompt says otherwise.
+  // The main session's task kind, from the latest typed prompt. Starts as
+  // coding, also after a reload, so the guard is on until a prompt says otherwise.
   let task: TaskKind = 'coding'
-  const judging = () => task === 'coding'
+  // Each subagent's own kind, from its brief, by agentId. One spawned before a
+  // reload, or by no Agent call, has none and follows the main session.
+  const agents = new Map<string, TaskKind>()
+  // The coding subagents whose run has not ended, for the status line.
+  const running = new Set<string>()
+  const judging = (agentId: string | undefined) =>
+    ((agentId === undefined ? undefined : agents.get(agentId)) ?? task) === 'coding'
+  const status = () => {
+    const main = task === 'coding' ? 'TDD on' : 'TDD off (not coding)'
+    const n = running.size
+    return n === 0 ? main : `${main} · judging ${n} subagent${n === 1 ? '' : 's'}`
+  }
 
   on('session.start', async ($, e, next) => {
     for (const problem of config.problems) $.ui.log(`tdd-mod: ${problem}`)
@@ -42,20 +53,39 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (!config.classifyTasks || e.origin.kind !== 'composer' || isGuardInstruction(e.text)) return next(e)
     task = await classifyTask(request => $.model.complete(request), config, e.text, task)
-    $.ui.status(task === 'coding' ? 'TDD on' : 'TDD off (not coding)')
-    $.ui.log(`tdd-mod: task ${task}: ${e.text.slice(0, 80).replace(/\s+/g, ' ')}`, { to: 'debug' })
+    $.ui.status(status())
+    $.ui.log(`tdd-mod: task ${task}: ${excerpt(e.text)}`, { to: 'debug' })
+    return next(e)
+  })
+
+  // A subagent's task is its brief, not the prompt the person last typed.
+  on('agent.spawn', async ($, e, next) => {
+    if (!config.classifyTasks) return next(e)
+    const kind = await classifyTask(request => $.model.complete(request), config, e.prompt, 'coding')
+    const spawned = await next(e)
+    const { agentId } = spawned
+    if (agentId === undefined) return spawned
+    agents.set(agentId, kind)
+    if (kind === 'coding') running.add(agentId)
+    $.ui.status(status())
+    $.ui.log(`tdd-mod: subagent ${agentId} task ${kind}: ${excerpt(e.prompt)}`, { to: 'debug' })
+    return spawned
+  })
+
+  on('turn.complete', ($, e, next) => {
+    if (e.agentId !== undefined && running.delete(e.agentId)) $.ui.status(status())
     return next(e)
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    if (!judging() || !inScope(e.file_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
     const before = await readBefore($, e.file_path)
     const verdict = await judgeWrite($, config, e.agentId, before, { path: e.file_path, content: e.content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!judging() || !inScope(e.file_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
     const before = await readBefore($, e.file_path)
     if (before.kind !== 'present') return next(e)
     const after = applyEdit(before.content, e.old_string, e.new_string, e.replace_all)
@@ -67,7 +97,7 @@ export const register: Register = (on, options) => {
 
   // Shell writes bypass the TDD check: send them through Write/Edit instead.
   on('tool.call', { tool: 'Bash' }, ($, e, next) => {
-    if (!judging()) return next(e)
+    if (!judging(e.agentId)) return next(e)
     const targets = bashWriteTargets(e.command, inScope)
     if (targets.length === 0) return next(e)
     $.ui.log(`tdd-mod: violation (bash write) ${targets.join(', ')}`, { to: 'debug' })
@@ -79,7 +109,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => {
-    if (!judging() || !inScope(e.notebook_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.notebook_path)) return next(e)
     const before = await readBefore($, e.notebook_path)
     const mode = e.edit_mode ?? 'replace'
     const content =
@@ -132,6 +162,11 @@ function logPrompt($: EngineInterface, prompt: string, pending: Pending): void {
     const part = prompt.slice(i * LOG_CHUNK, (i + 1) * LOG_CHUNK)
     $.ui.log(`tdd-mod: blocked prompt ${pending.path} part ${i + 1}/${parts}:\n${part}`, { to: 'debug' })
   }
+}
+
+/** The start of a prompt, on one line, for the debug log. */
+function excerpt(text: string): string {
+  return text.slice(0, 80).replace(/\s+/g, ' ')
 }
 
 function denial(verdict: Verdict): string {
