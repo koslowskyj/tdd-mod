@@ -48,6 +48,9 @@ or process per write.
   implement or fix something is judged even when you asked a question or told
   the agent to delegate; one briefed to explore or review is not. While coding
   subagents run, the status line adds `· judging 1 subagent` (or `2 subagents`).
+  A subagent spawned before the mod reloaded (a `/config` change) has no label
+  yet: at its first write it is labelled from its brief, read back from its own
+  transcript, and counted on the status line from then on.
 - **Blocks shell writes to source files** (`cat > file`, `>>`, `tee`, `sed -i`,
   `cp`, inline Python/Node writes) and tells the agent to use Write or Edit, so
   every change can be judged. Moving files (`mv`, `git mv`) is allowed.
@@ -111,7 +114,8 @@ tail -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/debug/latest" | grep --line-buffere
 
 Lines look like `tdd-mod: pass (first opinion) src/cart.ts — Green phase: …`,
 `tdd-mod: violation (second opinion) …`, `tdd-mod: task other: …` or
-`tdd-mod: subagent <agentId> task coding: …`. For every
+`tdd-mod: subagent <agentId> task coding: …` (`… labelled late (coding): …`
+for one spawned before a reload). For every
 blocked write, the full judge prompt follows in numbered parts
 (`blocked prompt … part 1/3`), so the verdict can be replayed exactly.
 
@@ -292,12 +296,17 @@ manual.
   task ("now add …") to switch it back on.
 - **A subagent's label holds for its whole life.** A message sent to it later
   (SendMessage, a resumed agent, a teammate's next task) does not relabel it,
-  and a resumed coding subagent is judged but not counted in the status line.
-- **Subagents spawned before a reload follow the main session's label.** The
-  labels live in the module and start over when the mod reloads (a `/config`
-  change); so do agents no Agent call started, such as a workflow's.
+  and a resumed coding subagent whose label was kept is judged but not counted
+  in the status line.
+- **A subagent with no label is labelled from the first message with text in
+  its transcript.** That is its brief, unless the transcript has outgrown the
+  newest 4096 messages the session reads back. A transcript the session cannot
+  read (a workflow's agents) or without such a message leaves the subagent on
+  the main session's label; the debug log says
+  `subagent <agentId> has no brief to label`. If the classifier fails, the
+  subagent is judged as coding and the debug log says `not classified`.
 - **Each subagent spawn waits for one classifier call** before the subagent
-  starts.
+  starts; a subagent labelled late waits for it at its first write.
 - **Shell writes are caught by pattern.** A script file that is written and then
   run, or a path built at runtime, gets through.
 - **Judges disagree.** Stronger models are more lenient on the current prompt;

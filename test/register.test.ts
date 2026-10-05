@@ -20,9 +20,11 @@ const FAILED_RUN: SessionMessage[] = [
 type World = {
   files?: Record<string, string>
   messages?: SessionMessage[]
+  /** Each subagent's own transcript, by agentId; one not listed reads `messages`. */
+  agents?: Record<string, SessionMessage[] | { deny: string }>
   reply: ModelCompleteResult | ModelCompleteResult[]
-  /** What the task classifier answers, one per prompt in order (the last repeats). */
-  task?: string[]
+  /** What the task classifier answers, one per prompt in order (the last repeats): a label, a whole result, or a refusal. */
+  task?: (string | ModelCompleteResult | { deny: string })[]
 }
 
 /** Stands in for the engine: files, transcript, the validator and the tools. */
@@ -42,12 +44,13 @@ function engine(on: On, world: World) {
     return { value: undefined }
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
-  on('session.messages', () => ({ value: world.messages ?? FAILED_RUN }))
+  on('session.messages', ($, e) => ({ value: (e.agentId === undefined ? undefined : world.agents?.[e.agentId]) ?? world.messages ?? FAILED_RUN }))
   on('model.complete', ($, e) => {
     if (e.prompt.startsWith('Classify a request')) {
       seen.classified.push(e.prompt)
       const tasks = world.task ?? ['coding']
-      return { value: answer(tasks[Math.min(seen.classified.length, tasks.length) - 1] ?? 'coding') }
+      const task = tasks[Math.min(seen.classified.length, tasks.length) - 1] ?? 'coding'
+      return typeof task === 'string' ? { value: answer(task) } : 'deny' in task ? task : { value: task }
     }
     seen.prompts.push(e.prompt)
     return { value: replies[Math.min(seen.prompts.length, replies.length) - 1] as ModelCompleteResult }
@@ -422,6 +425,86 @@ async function respond($: Engine, on: On, uses: TurnStepToolUse[]) {
   for await (const _ of stream);
   return stream.result
 }
+
+/** A subagent no agent.spawn hook saw (spawned before a reload), its transcript opening with `prompt`. */
+const OLD = 'agent-old'
+const briefed = (prompt: string) => ({ [OLD]: [{ role: 'user', text: prompt, toolUses: [] }] satisfies SessionMessage[] })
+
+describe('subagents labelled late', () => {
+  test('one briefed to code is judged while the main task is other', async ($, on) => {
+    const seen = engine(on, { task: ['other', 'coding'], agents: briefed('Implement the cart\ntotal test-first.'), reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    await $.prompt.submit({ ...typed, text: 'commit the work' })
+    const r = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
+    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(seen.logs).toContain(`tdd-mod: subagent ${OLD} labelled late (coding): Implement the cart total test-first.`)
+  })
+
+  test('one briefed to explore is not judged while the main task is coding', async ($, on) => {
+    const seen = engine(on, { task: ['coding', 'other'], agents: briefed('Find where the cart is priced and report the files.'), reply: answer('{"kind":"violation","reason":"never asked"}') })
+    await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
+    const r = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
+    expect(r.deny).toBeUndefined()
+    expect(seen.prompts).toEqual([])
+  })
+
+  test('one briefed to code is labelled by a shell write, not by other commands', async ($, on) => {
+    const seen = engine(on, { task: ['other', 'coding'], agents: briefed('Implement the cart total test-first.'), reply: answer('{"kind":"pass","reason":"never asked"}') })
+    await $.prompt.submit({ ...typed, text: 'commit the work' })
+    const run = await $.tool.call(inAgent(OLD, { tool: 'Bash', command: 'npm test' }))
+    expect(seen.classified.length).toBe(1)
+    const write = await $.tool.call(inAgent(OLD, { tool: 'Bash', command: "cat > src/cart.ts <<'EOF'\nx\nEOF" }))
+    expect([run.deny, write.deny?.includes('Write or Edit')]).toEqual([undefined, true])
+  })
+
+  test('its brief is classified once, also for two writes at the same time', async ($, on) => {
+    const seen = engine(on, { task: ['other', 'coding'], agents: briefed('Implement the cart total test-first.'), reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    await $.prompt.submit({ ...typed, text: 'commit the work' })
+    const write = (file_path: string) => $.tool.call(inAgent(OLD, { tool: 'Write', file_path, content: 'x' }))
+    const [a, b] = await Promise.all([write(SRC), write('/repo/src/total.ts')])
+    await write('/repo/src/price.ts')
+    expect([a.deny, b.deny]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+    expect(seen.classified.length).toBe(2)
+  })
+
+  const noBrief: [string, SessionMessage[] | { deny: string }][] = [
+    ['unreadable', { deny: `no transcript for ${OLD}` }],
+    ['without a brief', [{ role: 'assistant', text: 'done', toolUses: [] }]],
+  ]
+  for (const [why, transcript] of noBrief) {
+    test(`one whose transcript is ${why} follows the main task, and says so`, async ($, on) => {
+      const seen = engine(on, { task: ['coding', 'other'], agents: { [OLD]: transcript }, reply: answer('{"kind":"violation","reason":"no failing test"}') })
+      await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
+      const judged = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
+      await $.prompt.submit({ ...typed, text: 'commit the work' })
+      const passed = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'y' }))
+      expect([judged.deny, passed.deny]).toEqual(['tdd-mod: no failing test', undefined])
+      expect(seen.logs).toContain(`tdd-mod: subagent ${OLD} has no brief to label; it follows the main task`)
+    })
+  }
+
+  const classifierFailures: [string, ModelCompleteResult | { deny: string }, string][] = [
+    ['does not answer', { isAnswered: false, reason: 'empty-reply', usage: USAGE }, 'empty-reply'],
+    ['is refused', { deny: 'model blocked' }, 'model blocked'],
+  ]
+  for (const [how, failure, why] of classifierFailures) {
+    test(`one whose classifier ${how} is judged as coding, and says so`, async ($, on) => {
+      const seen = engine(on, { task: ['other', failure], agents: briefed('Find where the cart is priced.'), reply: answer('{"kind":"violation","reason":"no failing test"}') })
+      await $.prompt.submit({ ...typed, text: 'commit the work' })
+      const r = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
+      expect(r.deny).toBe('tdd-mod: no failing test')
+      expect(seen.logs.some(l => l.startsWith(`tdd-mod: subagent ${OLD} not classified (`) && l.includes(why) && l.endsWith('); judged as coding'))).toBe(true)
+    })
+  }
+
+  test('one labelled coding counts on the status line until its run ends', async ($, on) => {
+    const seen = engine(on, { task: ['other', 'coding'], agents: briefed('Implement the cart total test-first.'), reply: answer('{"kind":"pass","reason":""}') })
+    await $.prompt.submit({ ...typed, text: 'commit the work' })
+    await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
+    expect(seen.status.at(-1)).toBe('TDD off (not coding) · judging 1 subagent')
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-1', agentId: OLD, reason: 'answer' })
+    expect(seen.status.at(-1)).toBe('TDD off (not coding)')
+  })
+})
 
 describe('batches', () => {
   const CART = 'class Cart {\n}\nconst cart = new Cart()\n'

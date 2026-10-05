@@ -1,4 +1,4 @@
-import type { EngineInterface, Register, TurnStepToolUse } from 'claude-code'
+import type { EngineInterface, Register, SessionMessage, TurnStepToolUse } from 'claude-code'
 import { bashWriteTargets } from './bash.ts'
 import { applyCalls, batchFor, filesOf, type WriteCall } from './batch.ts'
 import { isInScope, isTestFile, readConfig, type Config } from './config.ts'
@@ -20,6 +20,15 @@ const BATCH_WAIT_MS = 3000
  * to log a retry that reverses it.
  */
 type Verdicts = { byEvidence: Map<string, Verdict>; byWrite: Map<string, Verdict['kind']> }
+
+/** The task labels writes are judged by: the main session's, and each subagent's from its brief. */
+type Labels = {
+  main: () => TaskKind
+  agents: ReadonlyMap<string, TaskKind>
+  late: Map<string, Promise<TaskKind | undefined>>
+  running: Set<string>
+  status: () => string
+}
 
 /** One model response: the tool calls it asked for once whole, and the verdict on the writes it batches. */
 type Step = { uses: readonly TurnStepToolUse[]; ended: boolean; whole: Promise<void>; end: () => void; verdict?: Promise<Verdict> }
@@ -48,17 +57,16 @@ export const register: Register = (on, options) => {
   // coding, also after a reload, so the guard is on until a prompt says otherwise.
   let task: TaskKind = 'coding'
   // Each subagent's own kind, from its brief, by agentId. One spawned before a
-  // reload, or by no Agent call, has none and follows the main session.
+  // reload has none and is labelled late, at its first write (labels.late).
   const agents = new Map<string, TaskKind>()
   // The coding subagents whose run has not ended, for the status line.
   const running = new Set<string>()
-  const judging = (agentId: string | undefined) =>
-    ((agentId === undefined ? undefined : agents.get(agentId)) ?? task) === 'coding'
   const status = () => {
     const main = task === 'coding' ? 'TDD on' : 'TDD off (not coding)'
     const n = running.size
     return n === 0 ? main : `${main} · judging ${n} subagent${n === 1 ? '' : 's'}`
   }
+  const labels: Labels = { main: () => task, agents, late: new Map(), running, status }
   const verdicts: Verdicts = { byEvidence: new Map(), byWrite: new Map() }
   // The latest model response of each loop (main: ''), whose tool calls are running now.
   const steps = new Map<string, Step>()
@@ -125,7 +133,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
+    if (!inScope(e.file_path) || !(await judging($, config, labels, e.agentId))) return next(e)
     const root = await projectRoot($)
     if (isTestFile(e.file_path, root)) {
       shown($, Date.now(), 'pass', e.file_path, 'test file')
@@ -138,7 +146,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
+    if (!inScope(e.file_path) || !(await judging($, config, labels, e.agentId))) return next(e)
     const root = await projectRoot($)
     if (isTestFile(e.file_path, root)) {
       shown($, Date.now(), 'pass', e.file_path, 'test file')
@@ -151,10 +159,9 @@ export const register: Register = (on, options) => {
   })
 
   // Shell writes bypass the TDD check: send them through Write/Edit instead.
-  on('tool.call', { tool: 'Bash' }, ($, e, next) => {
-    if (!judging(e.agentId)) return next(e)
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const targets = bashWriteTargets(e.command, inScope)
-    if (targets.length === 0) return next(e)
+    if (targets.length === 0 || !(await judging($, config, labels, e.agentId))) return next(e)
     $.ui.log(`tdd-mod: violation (bash write) ${targets.join(', ')}`, { to: 'debug' })
     return {
       deny:
@@ -164,7 +171,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.notebook_path)) return next(e)
+    if (!inScope(e.notebook_path) || !(await judging($, config, labels, e.agentId))) return next(e)
     const before = await readBefore($, e.notebook_path)
     const mode = e.edit_mode ?? 'replace'
     const content =
@@ -173,6 +180,57 @@ export const register: Register = (on, options) => {
     const verdict = await judgeWrite($, config, verdicts, e.agentId, before, { path: e.notebook_path, content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
+}
+
+/** Whether the writes of `agentId`'s loop are judged; absent, the main session's. */
+async function judging($: EngineInterface, config: Config, labels: Labels, agentId: string | undefined): Promise<boolean> {
+  if (agentId === undefined) return labels.main() === 'coding'
+  const kind = labels.agents.get(agentId) ?? (await labelLateOnce($, config, labels, agentId))
+  return (kind ?? labels.main()) === 'coding'
+}
+
+/** labelLate, once per agent: the pending label is stored, so writes racing in classify its brief once. */
+function labelLateOnce($: EngineInterface, config: Config, labels: Labels, agentId: string): Promise<TaskKind | undefined> {
+  let label = labels.late.get(agentId)
+  if (label === undefined) labels.late.set(agentId, (label = labelLate($, config, labels, agentId)))
+  return label
+}
+
+/**
+ * A subagent no agent.spawn hook saw (spawned before a reload) is labelled
+ * from its brief, read back from its own transcript; undefined follows the
+ * main session.
+ */
+async function labelLate($: EngineInterface, config: Config, labels: Labels, agentId: string): Promise<TaskKind | undefined> {
+  if (!config.classifyTasks) return undefined
+  const brief = briefOf(await $.session.messages({ agentId }))
+  if (brief === undefined) {
+    $.ui.log(`tdd-mod: subagent ${agentId} has no brief to label; it follows the main task`, { to: 'debug' })
+    return undefined
+  }
+  // A failed call counts as coding, as classifyTask has it; a refused one too,
+  // instead of failing the hook, which would let the write through unjudged.
+  const failed = (why: string) => $.ui.log(`tdd-mod: subagent ${agentId} not classified (${why}); judged as coding`, { to: 'debug' })
+  const complete: Complete = async request => {
+    const reply = await $.model.complete(request)
+    if (!reply.isAnswered) failed(reply.reason)
+    return reply
+  }
+  const kind = await classifyTask(complete, config, brief, 'coding').catch((error: unknown) => {
+    failed(error instanceof Error ? error.message : String(error))
+    return 'coding' as const
+  })
+  $.ui.log(`tdd-mod: subagent ${agentId} labelled late (${kind}): ${excerpt(brief)}`, { to: 'debug' })
+  if (kind === 'coding') {
+    labels.running.add(agentId)
+    $.ui.status(labels.status())
+  }
+  return kind
+}
+
+/** A subagent's brief: the first user message with text in its transcript; undefined when unreadable or none. */
+function briefOf(messages: readonly SessionMessage[] | { deny: string }): string | undefined {
+  return Array.isArray(messages) ? messages.find(m => m.role === 'user' && m.text.trim() !== '')?.text : undefined
 }
 
 async function readBefore($: EngineInterface, path: string): Promise<FileContent> {
