@@ -1,6 +1,6 @@
 {
   "name": "tdd-mod",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Blocks file writes that break Red-Green-Refactor on coding tasks (port of probity's enforceTdd).",
   "author": {
     "name": "koslowskyj",
@@ -49,7 +49,7 @@
     "extensions": {
       "type": "string",
       "title": "Source file extensions",
-      "description": "Comma-separated extensions of the files judged.",
+      "description": "Comma-separated extensions of the files judged. Add sql, yaml, yml or json where such files carry behaviour (migrations, an OpenAPI spec). Test files are never judged.",
       "default": "ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,rb,php,cs,fs,swift,c,cc,cpp,h,hpp,ex,exs,erl,clj,dart,lua,ipynb,vue,svelte"
     },
     "ignore": {

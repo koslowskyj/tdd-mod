@@ -211,7 +211,14 @@ configured models, and reports the hit rate per case:
 claude -p "/tdd-eval 3" --plugin-dir ~/tdd-mod
 ```
 
-Results so far, 3 runs per case:
+Results with 0.3.0's prompt (the last test run, refactors under green), 3 runs
+per case:
+
+| Judge model | Writes that should pass | Writes that should be blocked | Total |
+|---|---|---|---|
+| haiku (default) | 57/57 | 12/12 | 69/69 |
+
+On the earlier set of 20 cases and the earlier prompt:
 
 | Judge model | Writes that should pass | Writes that should be blocked | Total |
 |---|---|---|---|
@@ -220,8 +227,10 @@ Results so far, 3 runs per case:
 | sonnet | 51/51 | 0/9 | 51/60 |
 
 The classifier (haiku) labelled all 45 prompts correctly. The set is small
-(three distinct violations), so treat these numbers as a direction, not a
-benchmark. Add a case whenever the judge gets a real write wrong.
+(four distinct violations), so treat these numbers as a direction, not a
+benchmark. Add a case whenever the judge gets a real write wrong. The cases
+replay single writes through the judge; test files, batches and the verdict
+cache are covered by `claude plugin test .`.
 
 ## Development
 
