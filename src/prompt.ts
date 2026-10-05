@@ -24,7 +24,7 @@ You will see these inputs:
    raw file text or a patch/diff in any common format.
 4. "Last test run" — the latest test command the agent ran in this
    session, whether it was red or green, and its output, even when it
-   is older than the recent session. Absent when no test has run yet.
+   is older than the recent session, or that no test has run yet.
    A failure shown there is observed: production code that addresses
    it is the green step.
 

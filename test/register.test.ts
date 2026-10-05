@@ -670,6 +670,11 @@ describe('tdd logic', () => {
     expect(after('FAIL a.test.ts')).not.toContain(REFACTOR)
   })
 
+  test('the prompt says so when no test has run yet', () => {
+    const prompt = buildPrompt([{ kind: 'prompt', text: 'Do the kata' }], { kind: 'absent' }, { path: 'a.ts', content: 'x' })
+    expect(prompt).toContain('## Last test run\n\nNo test has run in this session yet, so no failure has been observed.')
+  })
+
   test('the prompt leaves out an empty history', () => {
     const prompt = buildPrompt([], { kind: 'unknown' }, { path: 'a.ts', content: 'x' })
     expect(prompt).not.toContain('## Recent session')

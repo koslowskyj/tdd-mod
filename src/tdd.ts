@@ -173,6 +173,10 @@ const GREEN_REFACTOR =
   'code (a field, an import, a function nothing calls). Block it only when it ' +
   'adds behaviour that no test drove.'
 
+// Left unsaid, the judge assumed a test it could not see and passed a stub
+// written before any test (/tdd-eval "stub before any test").
+const NO_TEST_RUN = '## Last test run\n\nNo test has run in this session yet, so no failure has been observed.'
+
 function formatTestRun(run: TestRun): string {
   const result = run.red ? 'red: a test failed' : 'green: every test passed'
   const output = `## Last test run\n\n\`${run.command}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
@@ -192,7 +196,7 @@ export function buildPrompt(
     sections.push(`## Recent session\n\n${recent.map(formatEvent).join('\n')}`)
   }
   const run = lastTestRun(history)
-  if (run) sections.push(formatTestRun(run))
+  sections.push(run ? formatTestRun(run) : NO_TEST_RUN)
   if (also.length === 0) {
     sections.push(`## Current file content\n\n${formatBefore(before)}`)
     sections.push(`## Pending action\n\nFile: ${action.path}\n\n${action.content}`)
