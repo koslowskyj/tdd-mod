@@ -78,14 +78,22 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.file_path) || isTestFile(e.file_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
+    if (isTestFile(e.file_path)) {
+      shown($, Date.now(), 'pass', e.file_path, 'test file')
+      return next(e)
+    }
     const before = await readBefore($, e.file_path)
     const verdict = await judgeWrite($, config, e.agentId, before, { path: e.file_path, content: e.content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!judging(e.agentId) || !inScope(e.file_path) || isTestFile(e.file_path)) return next(e)
+    if (!judging(e.agentId) || !inScope(e.file_path)) return next(e)
+    if (isTestFile(e.file_path)) {
+      shown($, Date.now(), 'pass', e.file_path, 'test file')
+      return next(e)
+    }
     const before = await readBefore($, e.file_path)
     if (before.kind !== 'present') return next(e)
     const after = applyEdit(before.content, e.old_string, e.new_string, e.replace_all)
@@ -136,13 +144,19 @@ async function judgeWrite(
   before: FileContent,
   pending: Pending,
 ): Promise<Verdict> {
+  const started = Date.now()
   const complete: Complete = request => $.model.complete(request)
   const decision = await decide(complete, config, () => recentHistory($, agentId), before, pending)
-  decision.opinions.forEach((verdict, i) =>
-    log($, verdict, pending, decision.fastPath ? 'fast path: one new test' : i === 0 ? 'first opinion' : 'second opinion'),
-  )
+  const which = (i: number) => (decision.fastPath ? 'fast path: one new test' : i === 0 ? 'first opinion' : 'second opinion')
+  decision.opinions.forEach((verdict, i) => log($, verdict, pending, which(i)))
   if (decision.verdict.kind === 'violation' && decision.prompt) logPrompt($, decision.prompt, pending)
+  shown($, started, decision.verdict.kind, pending.path, which(decision.opinions.length - 1))
   return decision.verdict
+}
+
+/** One transcript line per decision, passes included, with how it was reached and how long it took. */
+function shown($: EngineInterface, started: number, kind: Verdict['kind'], path: string, how: string): void {
+  $.ui.log(`tdd-mod: ${kind} ${path} (${how}, ${Date.now() - started} ms)`)
 }
 
 async function recentHistory($: EngineInterface, agentId: string | undefined): Promise<HistoryEvent[]> {

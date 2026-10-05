@@ -72,9 +72,17 @@ claude --plugin-dir ~/tdd-mod
 ```
 
 Then give the agent a coding task. Each blocked write shows up as a tool error
-starting with `tdd-mod:`.
+starting with `tdd-mod:`. Every decision on a write, passes included, also
+shows as a dim line in the transcript (the model does not see it), with how it
+was reached and how long the write waited for it:
 
-To see every verdict, start with `--debug` and follow the debug log:
+```
+tdd-mod: pass src/cart.ts (first opinion, 2140 ms)
+tdd-mod: pass src/cart.test.ts (test file, 0 ms)
+tdd-mod: violation src/total.ts (second opinion, 4310 ms)
+```
+
+To see every verdict with its reason, start with `--debug` and follow the debug log:
 
 ```sh
 claude --plugin-dir ~/tdd-mod --debug

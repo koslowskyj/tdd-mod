@@ -27,13 +27,14 @@ type World = {
 
 /** Stands in for the engine: files, transcript, the validator and the tools. */
 function engine(on: On, world: World) {
-  const seen = { prompts: [] as string[], written: [] as string[], logs: [] as string[], classified: [] as string[], status: [] as (string | undefined)[] }
+  const seen = { prompts: [] as string[], written: [] as string[], logs: [] as string[], transcript: [] as string[], classified: [] as string[], status: [] as (string | undefined)[] }
   const replies = Array.isArray(world.reply) ? world.reply : [world.reply]
   const files = world.files ?? {}
   on('fs.exists', ($, e) => ({ value: e.path in files }))
   on('fs.read', ($, e) => (e.path in files ? { value: files[e.path] ?? '' } : { deny: 'ENOENT' }))
   on('ui.log', ($, e) => {
     seen.logs.push(e.text)
+    if (e.to === 'transcript') seen.transcript.push(e.text)
     return { value: undefined }
   })
   on('ui.status', ($, e) => {
@@ -160,6 +161,18 @@ describe('tool.call', () => {
     const seen = engine(on, { reply: answer('{"kind":"pass","reason":"green: minimum to pass the failing test"}') })
     await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
     expect(seen.logs.some(l => l.includes('pass (first opinion)') && l.includes('green: minimum'))).toBe(true)
+  })
+
+  test('every decision shows in the transcript with how it was reached and its latency', async ($, on) => {
+    const seen = engine(on, { reply: [answer('{"kind":"pass","reason":"green"}'), answer('{"kind":"violation","reason":"r"}')] })
+    await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    await $.tool.call({ tool: 'Write', file_path: '/repo/src/cart.test.ts', content: 'x' })
+    await $.tool.call({ tool: 'Write', file_path: '/repo/src/total.ts', content: 'y' })
+    expect(seen.transcript.map(l => l.replace(/\d+ ms/, 'N ms'))).toEqual([
+      `tdd-mod: pass ${SRC} (first opinion, N ms)`,
+      'tdd-mod: pass /repo/src/cart.test.ts (test file, N ms)',
+      'tdd-mod: violation /repo/src/total.ts (second opinion, N ms)',
+    ])
   })
 
   test('fails closed when the validator does not answer', async ($, on) => {
