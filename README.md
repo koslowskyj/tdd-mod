@@ -55,8 +55,8 @@ or process per write.
   `cp`, inline Python/Node writes) and tells the agent to use Write or Edit, so
   every change can be judged. Moving files (`mv`, `git mv`) is allowed, and so
   are shell writes to test files, like Write and Edit.
-- **Passes every write to a test file** without asking the model: writing a
-  test is the red step itself. A test file is one in a `test/`, `tests/` or
+- **Passes every write to a test file** without asking the model (`Write`,
+  `Edit` and `NotebookEdit`): writing a test is the red step itself. A test file is one in a `test/`, `tests/` or
   `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`,
   `*Test.java`/`.kt`, `*IT.java`/`.kt`, `test_*.py`, `*_test.py` or
   `*_test.go`.

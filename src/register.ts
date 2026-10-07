@@ -173,6 +173,10 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => {
     if (!inScope(e.notebook_path) || !(await judging($, config, labels, e.agentId))) return next(e)
+    if (isTestFile(e.notebook_path, await projectRoot($))) {
+      shown($, Date.now(), 'pass', e.notebook_path, 'test file')
+      return next(e)
+    }
     const before = await readBefore($, e.notebook_path)
     const mode = e.edit_mode ?? 'replace'
     const content =

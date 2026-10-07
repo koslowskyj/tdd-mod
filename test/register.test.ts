@@ -238,6 +238,16 @@ describe('tool.call', () => {
     expect(seen.prompts).toEqual([])
   })
 
+  test('a notebook edit to a test file passes without the validator, a source notebook is judged', async ($, on) => {
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    on('tool.call', { tool: 'NotebookEdit' }, () => ({ result: { new_source: '', cell_type: 'code', language: 'python', edit_mode: 'replace', notebook_path: '', original_file: '', updated_file: '' } }))
+    const edit = (notebook_path: string) => $.tool.call({ tool: 'NotebookEdit', notebook_path, new_source: 'x' })
+    const test = await edit('/repo/test/cart.ipynb')
+    const source = await edit('/repo/src/cart.ipynb')
+    expect([test.deny, source.deny]).toEqual([undefined, 'tdd-mod: no failing test'])
+    expect(seen.prompts.length).toBe(2)
+  })
+
   test('a project checked out under a folder named test is still judged', async ($, on) => {
     const ROOT = '/home/u/test/shop'
     on('session.root', () => ({ value: ROOT }))
