@@ -163,6 +163,36 @@ describe('tool.call', () => {
     expect([byName.deny, byFolder.deny]).toEqual([undefined, undefined])
   })
 
+  // K13: a subagent reported a refused shell write to this test helper.
+  const HELPER = 'service/src/test/java/tech/konnek/agent/loop/ExistingSignIns.java'
+  const ROOT = '/home/johannes/workspaces/process-automation'
+  const javaBody = 'package tech.konnek.agent.loop;\nfinal class ExistingSignIns { java.util.Map<String, String> all() { return null; } }'
+  const shellRewrites: [string, string][] = [
+    ['python heredoc, relative path', `python3 - <<'EOF'\nwith open('${HELPER}','w') as f:\n    f.write("""${javaBody}""")\nEOF`],
+    ['python heredoc, path variable', `python3 - <<'EOF'\np = '${HELPER}'\ns = open(p).read()\nopen(p, 'w').write(s.replace('null', 'Map.of()'))\nEOF`],
+    ['python heredoc, absolute path', `python3 - <<'EOF'\nopen('${ROOT}/${HELPER}','w').write("x")\nEOF`],
+    ['python heredoc, ./ path', `python3 - <<'EOF'\nopen('./${HELPER}','w').write("x")\nEOF`],
+    ['python Path.write_text', `python3 -c "from pathlib import Path; Path('${HELPER}').write_text('x')"`],
+    ['cat heredoc', `cat > ${HELPER} <<'EOF'\n${javaBody}\nEOF`],
+    ['cat heredoc, absolute path', `cat > ${ROOT}/${HELPER} <<'EOF'\n${javaBody}\nEOF`],
+    ['cat heredoc, ./ path', `cat > ./${HELPER} <<'EOF'\n${javaBody}\nEOF`],
+    ['perl -i', `perl -i -pe 's/null/Map.of()/' ${HELPER}`],
+    ['perl -pi, absolute path', `perl -pi -e 's/null/Map.of()/' ${ROOT}/${HELPER}`],
+    ['sed -i, ./ path', `sed -i 's/null/Map.of()/' ./${HELPER}`],
+    ['cd into the module, module-relative path', "cd service && perl -i -pe 's/null/Map.of()/' src/test/java/tech/konnek/agent/loop/ExistingSignIns.java"],
+    ['cd elsewhere, absolute path', `cd /tmp && cat > ${ROOT}/${HELPER} <<'EOF'\n${javaBody}\nEOF`],
+    ['cd up, ../ path', `cd service/src && cp /tmp/x.java ../../${HELPER}`],
+  ]
+  test('a Bash rewrite of a test helper runs, in every shape a shell rewrite takes', async ($, on) => {
+    on('session.root', () => ({ value: ROOT }))
+    engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const denied: string[] = []
+    for (const [shape, command] of shellRewrites) {
+      if ((await $.tool.call({ tool: 'Bash', command })).deny !== undefined) denied.push(shape)
+    }
+    expect(denied).toEqual([])
+  })
+
   test('a Bash command that writes a test file and a source file is denied for the source file only', async ($, on) => {
     engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
     const r = await $.tool.call({ tool: 'Bash', command: 'tee src/cart.test.ts src/cart.ts < in.txt' })
