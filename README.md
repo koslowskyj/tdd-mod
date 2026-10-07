@@ -53,7 +53,8 @@ or process per write.
   transcript, and counted on the status line from then on.
 - **Blocks shell writes to source files** (`cat > file`, `>>`, `tee`, `sed -i`,
   `cp`, inline Python/Node writes) and tells the agent to use Write or Edit, so
-  every change can be judged. Moving files (`mv`, `git mv`) is allowed.
+  every change can be judged. Moving files (`mv`, `git mv`) is allowed, and so
+  are shell writes to test files, like Write and Edit.
 - **Passes every write to a test file** without asking the model: writing a
   test is the red step itself. A test file is one in a `test/`, `tests/` or
   `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`,
@@ -314,7 +315,7 @@ manual.
 - **Test files are never judged.** Adding two tests at once, or a new test while
   the last green left a refactor unmade, goes through in a test file. Fixtures
   and helpers under a test folder count as tests too. A shell write to a test
-  file is still blocked and sent to Write/Edit.
+  file passes too.
 - **One new test always passes**, so the check for a refactor left unmade after
   green is skipped (turn off `fastPath` to get it back).
 - **Only one response is a batch.** A change the agent spreads over consecutive

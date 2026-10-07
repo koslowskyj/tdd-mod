@@ -156,6 +156,20 @@ describe('tool.call', () => {
     expect(seen.prompts).toEqual([])
   })
 
+  test('a Bash command that writes only test files runs, like Write and Edit', async ($, on) => {
+    engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const byName = await $.tool.call({ tool: 'Bash', command: "sed -i 's/a/b/' service/src/test/java/a/FooTest.java" })
+    const byFolder = await $.tool.call({ tool: 'Bash', command: 'echo x > src/test/fixtures/cart.ts' })
+    expect([byName.deny, byFolder.deny]).toEqual([undefined, undefined])
+  })
+
+  test('a Bash command that writes a test file and a source file is denied for the source file only', async ($, on) => {
+    engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const r = await $.tool.call({ tool: 'Bash', command: 'tee src/cart.test.ts src/cart.ts < in.txt' })
+    expect(r.deny).toContain('src/cart.ts')
+    expect(r.deny).not.toContain('cart.test.ts')
+  })
+
   test('other Bash commands run', async ($, on) => {
     engine(on, { reply: answer('{"kind":"pass","reason":""}') })
     const r = await $.tool.call({ tool: 'Bash', command: 'npm test 2>&1 | tail -30' })

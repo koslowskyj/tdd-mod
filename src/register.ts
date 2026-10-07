@@ -160,7 +160,8 @@ export const register: Register = (on, options) => {
 
   // Shell writes bypass the TDD check: send them through Write/Edit instead.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const targets = bashWriteTargets(e.command, inScope)
+    const root = await projectRoot($)
+    const targets = bashWriteTargets(e.command, path => inScope(path) && !isTestFile(path, root))
     if (targets.length === 0 || !(await judging($, config, labels, e.agentId))) return next(e)
     $.ui.log(`tdd-mod: violation (bash write) ${targets.join(', ')}`, { to: 'debug' })
     return {
