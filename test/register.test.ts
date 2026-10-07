@@ -233,6 +233,16 @@ describe('tool.call', () => {
     expect(seen.transcript.at(-1)?.replace(/\d+ ms/, 'N ms')).toBe(`tdd-mod: violation ${SRC} (cached, N ms)`)
   })
 
+  test('a retry after the validator gave no answer asks it again', async ($, on) => {
+    const none = { isAnswered: false, reason: 'aborted', usage: USAGE } as const
+    const seen = engine(on, { reply: [none, none, answer('{"kind":"pass","reason":""}')] })
+    const first = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    const retry = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    expect(first.deny).toContain('gave no answer')
+    expect(retry.deny).toBeUndefined()
+    expect(seen.prompts.length).toBe(3)
+  })
+
   test('a retry after a new test run is judged again, and a reversed verdict is logged', async ($, on) => {
     const world: World = { messages: FAILED_RUN, reply: [answer('{"kind":"violation","reason":"no failing test"}'), answer('{"kind":"violation","reason":"no failing test"}'), answer('{"kind":"pass","reason":"green"}')] }
     const seen = engine(on, world)

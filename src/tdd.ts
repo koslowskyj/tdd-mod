@@ -56,7 +56,8 @@ export function evidenceOf(events: readonly HistoryEvent[]): string {
   return JSON.stringify([lastTestRun(events) ?? null, prompt?.kind === 'prompt' ? prompt.text : null])
 }
 
-export type Verdict = { kind: 'pass' | 'violation'; reason: string }
+/** `unanswered`: a violation only because the validator gave no answer, so it is no evidence to cache. */
+export type Verdict = { kind: 'pass' | 'violation'; reason: string; unanswered?: true }
 
 // Test declarations per language, by extension. A regex stand-in for
 // probity's ast-grep matchers: the module has no Node to run ast-grep.

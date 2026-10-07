@@ -68,6 +68,6 @@ async function ask(complete: Complete, config: Config, prompt: string): Promise<
   // Fail-closed: no answer from the validator counts as a violation.
   return reply.isAnswered
     ? parseVerdict(reply.text)
-    : { kind: 'violation', reason: `the TDD validator gave no answer (${reply.reason}); retry the write.` }
+    : { kind: 'violation', reason: `the TDD validator gave no answer (${reply.reason}); retry the write.`, unanswered: true }
 }
 

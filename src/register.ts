@@ -348,7 +348,7 @@ async function judgeWrite(
   if (previous !== undefined && previous !== decision.verdict.kind) {
     $.ui.log(`tdd-mod: verdict reversed on retry (${previous} → ${decision.verdict.kind}) ${pending.path}`, { to: 'debug' })
   }
-  verdicts.byEvidence.set(key, decision.verdict)
+  if (!decision.verdict.unanswered) verdicts.byEvidence.set(key, decision.verdict)
   verdicts.byWrite.set(write, decision.verdict.kind)
   return decision.verdict
 }

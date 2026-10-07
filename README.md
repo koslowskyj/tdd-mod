@@ -71,7 +71,8 @@ or process per write.
   a model call, as long as there is no new evidence: no new test run and no new
   prompt from you. After new evidence it is judged again; a retry whose verdict
   flips is logged as `verdict reversed on retry (violation → pass)` in the
-  debug log.
+  debug log. A block because the judge gave no answer is not kept: the retry
+  asks the judge again.
 - **Respects an explicit override.** Tell the agent *"I'm overriding the TDD
   guard for this write; let it through."* and the judge lets that write pass.
 
