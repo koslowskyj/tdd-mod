@@ -2,7 +2,7 @@ import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage, TurnStep
 import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
-import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, parseVerdict, toHistory, trimHistory } from '../src/tdd.ts'
+import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, parseVerdict, toHistory, trimHistory, type HistoryEvent } from '../src/tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const SRC = '/repo/src/cart.ts'
@@ -338,6 +338,15 @@ describe('tool.call', () => {
     expect(seen.prompts[0]).toContain('## Last test run\n\n`npm test` was red: a test failed. Its output:\n\nFAIL expected 3, received 0')
     expect(seen.prompts[0]).not.toContain('npm test"}) →')
     expect(seen.prompts[0]).toContain('4. "Last test run"')
+  })
+
+  test('a long session and a large file reach the validator as a bounded prompt', async ($, on) => {
+    const huge = 'x'.repeat(500_000)
+    const writes: SessionMessage[] = Array.from({ length: 50 }, (_, i) => ({ role: 'assistant', text: '', toolUses: [{ tool_use_id: `w${i}`, tool: 'Write', input: { file_path: `/repo/f${i}.ts`, content: huge }, text: huge }] }))
+    const seen = engine(on, { files: { [SRC]: `${huge}\nold\n` }, messages: [...FAILED_RUN, ...writes], reply: answer('{"kind":"pass","reason":""}') })
+    await $.tool.call({ tool: 'Write', file_path: SRC, content: `${huge}\nnew\n` })
+    expect(seen.prompts[0]?.length).toBeLessThan(120_000)
+    expect(seen.prompts[0]).toContain('\nnew\n')
   })
 
   test('a new file is shown to the validator as absent', async ($, on) => {
@@ -810,6 +819,27 @@ describe('tdd logic', () => {
   test('the prompt says so when no test has run yet', () => {
     const prompt = buildPrompt([{ kind: 'prompt', text: 'Do the kata' }], { kind: 'absent' }, { path: 'a.ts', content: 'x' })
     expect(prompt).toContain('## Last test run\n\nNo test has run in this session yet, so no failure has been observed.')
+  })
+
+  // K12: every write of a long session timed out at the judge (120 s) with a prompt that grew with the session.
+  test('the prompt stays bounded however long the session and the files are', () => {
+    const huge = 'x'.repeat(1_000_000)
+    const history: HistoryEvent[] = [
+      { kind: 'prompt', text: huge },
+      ...Array.from({ length: 200 }, (_, i): HistoryEvent => ({ kind: 'tool', tool: 'Write', input: { file_path: `/r/f${i}.ts`, content: huge }, output: huge })),
+      { kind: 'tool', tool: 'Bash', input: { command: `npm test # ${huge}` }, output: `${huge}\nFAIL a.test.ts` },
+      { kind: 'tool', tool: 'Read', input: { file_path: '/r/newest.ts' }, output: 'newest' },
+    ]
+    const file = (middle: string) => `${'a\n'.repeat(250_000)}${middle}\n${'b\n'.repeat(250_000)}`
+    const second = { path: '/r/second.ts', before: { kind: 'present', content: file('OLD_LINE') } as const, content: file('NEW_LINE') }
+    const together = buildPrompt(history, second.before, { path: '/r/first.ts', content: second.content }, [second])
+    expect(together.length).toBeLessThan(150_000)
+    expect(together).toContain('Read({"file_path":"/r/newest.ts"}) → newest')
+    expect(together).toContain('FAIL a.test.ts')
+    expect(together).toContain('OLD_LINE')
+    expect(together).toContain('NEW_LINE')
+    expect(buildPrompt(history, second.before, { path: '/r/first.ts', content: second.content }).length).toBeLessThan(120_000)
+    expect(buildPrompt([], { kind: 'absent' }, { path: '/r/new.ts', content: huge }).length).toBeLessThan(40_000)
   })
 
   test('the prompt leaves out an empty history', () => {

@@ -5,6 +5,10 @@ import { DEFAULT_TDD_RULES, PROCESS_INSTRUCTIONS, RESPONSE_SPEC } from './prompt
 
 export const MAX_EVENTS = 10
 export const MAX_CONTENT_CHARS = 6000
+// A tool call's input (a Write carries the whole file) and a file shown to the judge.
+const MAX_INPUT_CHARS = 1500
+const MAX_FILE_CHARS = 20_000
+const CONTEXT_CHARS = 2000
 
 export type FileContent =
   | { kind: 'present'; content: string }
@@ -150,7 +154,32 @@ function clip(s: string, max: number): string {
 function formatEvent(event: HistoryEvent): string {
   if (event.kind === 'prompt') return `User: ${event.text}`
   const input = typeof event.input === 'string' ? event.input : JSON.stringify(event.input)
-  return `${event.tool}(${input}) → ${event.output}`
+  return `${event.tool}(${clip(input, MAX_INPUT_CHARS)}) → ${event.output}`
+}
+
+/**
+ * A file's before and after, cut for the judge: the changed region with some
+ * unchanged characters around it, each side at most MAX_FILE_CHARS. A file
+ * within the cap is left whole.
+ */
+function windowChange(before: FileContent, after: string): { before: FileContent; content: string } {
+  if (before.kind !== 'present') return { before, content: clip(after, MAX_FILE_CHARS) }
+  const old = before.content
+  if (old.length <= MAX_FILE_CHARS && after.length <= MAX_FILE_CHARS) return { before, content: after }
+  const shortest = Math.min(old.length, after.length)
+  let head = 0
+  while (head < shortest && old[head] === after[head]) head++
+  let tail = 0
+  while (tail < shortest - head && old[old.length - 1 - tail] === after[after.length - 1 - tail]) tail++
+  const skipHead = Math.max(0, head - CONTEXT_CHARS)
+  const skipTail = Math.max(0, tail - CONTEXT_CHARS)
+  const note = (n: number) => `[${n} unchanged characters omitted]`
+  const view = (text: string) =>
+    clip(
+      `${skipHead > 0 ? `${note(skipHead)}\n` : ''}${text.slice(skipHead, text.length - skipTail)}${skipTail > 0 ? `\n${note(skipTail)}` : ''}`,
+      MAX_FILE_CHARS,
+    )
+  return { before: { kind: 'present', content: view(old) }, content: view(after) }
 }
 
 function formatBefore(before: FileContent): string {
@@ -179,7 +208,7 @@ const NO_TEST_RUN = '## Last test run\n\nNo test has run in this session yet, so
 
 function formatTestRun(run: TestRun): string {
   const result = run.red ? 'red: a test failed' : 'green: every test passed'
-  const output = `## Last test run\n\n\`${run.command}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
+  const output = `## Last test run\n\n\`${clip(run.command, MAX_INPUT_CHARS)}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
   return run.red ? output : `${output}\n\n${GREEN_REFACTOR}`
 }
 
@@ -197,11 +226,12 @@ export function buildPrompt(
   }
   const run = lastTestRun(history)
   sections.push(run ? formatTestRun(run) : NO_TEST_RUN)
+  const main = { ...action, ...windowChange(before, action.content) }
   if (also.length === 0) {
-    sections.push(`## Current file content\n\n${formatBefore(before)}`)
-    sections.push(`## Pending action\n\nFile: ${action.path}\n\n${action.content}`)
+    sections.push(`## Current file content\n\n${formatBefore(main.before)}`)
+    sections.push(`## Pending action\n\nFile: ${main.path}\n\n${main.content}`)
   } else {
-    const changes = [{ ...action, before }, ...also]
+    const changes = [main, ...also.map(c => ({ ...c, ...windowChange(c.before, c.content) }))]
     sections.push(`## Current file content\n\n${changes.map(c => `File: ${c.path}\n\n${formatBefore(c.before)}`).join('\n\n')}`)
     sections.push(
       `## Pending action\n\n${BATCH_NOTE}\n\n${changes.map(c => `File: ${c.path}\n\n${c.content}`).join('\n\n')}`,

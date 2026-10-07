@@ -24,7 +24,9 @@ or process per write.
 - **Judges every write to a source file:** `Write`, `Edit` and `NotebookEdit`.
   The judge sees the last 10 prompts and tool calls of the session, the file as
   it is, and the file as the write would leave it, and answers pass or
-  violation.
+  violation. What it sees is capped, however long the session or large the
+  file: each tool output at 6000 characters, each tool input at 1500, and each
+  file at 20000, cut to the changed region with 2000 characters around it.
 - **Judges the writes of one response together.** When the agent sends several
   Write/Edit calls in one response (a method and its call, a signature and its
   caller in another file), the judge sees every file as they leave it
