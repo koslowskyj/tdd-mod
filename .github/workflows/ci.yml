@@ -92,6 +92,17 @@ jobs:
             else
               next="$major.$minor.$((patch + 1))"
             fi
+            # A version already bumped by hand in plugin.json is never lowered.
+            next=$(printf '%s\n' "$next" "$current" | sort -V | tail -n 1)
+          fi
+          # A rewritten history can leave a tag behind on a commit main no
+          # longer holds: stop with a clear message rather than retag.
+          if git rev-parse -q --verify "refs/tags/v$next" > /dev/null; then
+            if [ "$(git rev-parse "v$next^{commit}")" = "$(git rev-parse HEAD)" ]; then
+              echo "v$next already tags HEAD."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "::error::Tag v$next exists but is not in main's history; move or delete it, then re-run."
+            exit 1
           fi
           echo "Releasing $next (last tag: ${last_tag:-none}, plugin.json: $current)"
           echo "next=$next" >> "$GITHUB_OUTPUT"
