@@ -2,10 +2,9 @@
 
 [![CI](https://github.com/koslowskyj/tdd-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/koslowskyj/tdd-mod/actions/workflows/ci.yml)
 
-> **Experimental.** This is an experiment in enforcing test-driven development
-> on a coding agent. It works in a kata, has not been used on a real codebase
-> yet, and its settings, behaviour and the Claude Code API it is built on may
-> change without notice.
+> **Production-tested.** tdd-mod enforces test-driven development on the main
+> agent and on its subagents alike, and has been used to build several
+> production services.
 
 A Claude Code mod that keeps the agent to **Red → Green → Refactor**. Before
 each file write on a coding task, a judge model checks the write against the
