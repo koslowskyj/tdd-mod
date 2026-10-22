@@ -451,21 +451,21 @@ describe('task kind', () => {
     const seen = engine(on, { manifest: '{"name":"tdd-mod","version":"1.2.3"}', reply: answer('{"kind":"pass","reason":""}') })
     await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
     await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
-    expect(seen.status.at(-1)).toBe('tdd-mod v1.2.3 · TDD on')
+    expect(seen.status.at(-1)).toBe('(1.2.3) · TDD on')
   })
 
   // A reload runs session.start again, with the guard on and no prompt yet.
   test('the status line shows from session start, before any prompt', async ($, on) => {
     const seen = engine(on, { manifest: '{"name":"tdd-mod","version":"1.2.3"}', reply: answer('{"kind":"pass","reason":""}') })
     await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
-    expect(seen.status.at(-1)).toBe('tdd-mod v1.2.3 · TDD on')
+    expect(seen.status.at(-1)).toBe('(1.2.3) · TDD on')
   })
 
   test('with classifyTasks off the status line still shows', { options: { classifyTasks: false } }, async ($, on) => {
     const seen = engine(on, { manifest: '{"name":"tdd-mod","version":"1.2.3"}', reply: answer('{"kind":"pass","reason":""}') })
     await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
     await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
-    expect(seen.status.at(-1)).toBe('tdd-mod v1.2.3 · TDD on')
+    expect(seen.status.at(-1)).toBe('(1.2.3) · TDD on')
   })
 
   test('an unclear classifier answer keeps the guard on', async ($, on) => {

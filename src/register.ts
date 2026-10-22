@@ -69,7 +69,8 @@ export const register: Register = (on, options) => {
   let version: string | undefined
   const status = () => {
     const kind = task === 'coding' ? 'TDD on' : 'TDD off (not coding)'
-    const main = version === undefined ? kind : `tdd-mod v${version} · ${kind}`
+    // The engine puts "tdd-mod:" in front of the line, so the version follows bare.
+    const main = version === undefined ? kind : `(${version}) · ${kind}`
     const n = running.size
     return n === 0 ? main : `${main} · judging ${n} subagent${n === 1 ? '' : 's'}`
   }
