@@ -1,7 +1,7 @@
 import type { EngineInterface, Register, SessionMessage, TurnStepToolUse } from 'claude-code'
 import { bashWriteTargets } from './bash.ts'
 import { applyCalls, batchFor, filesOf, type WriteCall } from './batch.ts'
-import { isInScope, isTestFile, readConfig, type Config } from './config.ts'
+import { isInProject, isInScope, isTestFile, readConfig, type Config } from './config.ts'
 import { runEval } from './eval.ts'
 import { classifyTask, decide, type Complete, type Pending } from './guard.ts'
 import { isGuardInstruction, type TaskKind } from './task.ts'
@@ -51,7 +51,9 @@ function startStep(): Step {
 export const register: Register = (on, options) => {
   const config = readConfig(options)
   if (!config.enabled) return
-  const inScope = (path: string) => isInScope(path, config)
+  const inScope = (path: string, root: string) => isInScope(path, config) && isInProject(path, root)
+  // The writes the judge sees: source files of the project that are not tests.
+  const judgedIn = (root: string) => (path: string) => inScope(path, root) && !isTestFile(path, root)
 
   // The main session's task kind, from the latest typed prompt. Starts as
   // coding, also after a reload, so the guard is on until a prompt says otherwise.
@@ -133,35 +135,32 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    if (!inScope(e.file_path) || !(await judging($, config, labels, e.agentId))) return next(e)
     const root = await projectRoot($)
+    if (!inScope(e.file_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.file_path, root)) {
       shown($, Date.now(), 'pass', e.file_path, 'test file')
       return next(e)
     }
     const call: WriteCall = { tool: 'Write', file_path: e.file_path, content: e.content }
-    const judged = (path: string) => inScope(path) && !isTestFile(path, root)
-    const verdict = await judgeCall($, config, verdicts, steps.get(e.agentId ?? ''), judged, e.agentId, call)
+    const verdict = await judgeCall($, config, verdicts, steps.get(e.agentId ?? ''), judgedIn(root), e.agentId, call)
     return verdict?.kind === 'violation' ? { deny: denial(verdict) } : next(e)
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!inScope(e.file_path) || !(await judging($, config, labels, e.agentId))) return next(e)
     const root = await projectRoot($)
+    if (!inScope(e.file_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.file_path, root)) {
       shown($, Date.now(), 'pass', e.file_path, 'test file')
       return next(e)
     }
     const call: WriteCall = { tool: 'Edit', file_path: e.file_path, old_string: e.old_string, new_string: e.new_string, replace_all: e.replace_all }
-    const judged = (path: string) => inScope(path) && !isTestFile(path, root)
-    const verdict = await judgeCall($, config, verdicts, steps.get(e.agentId ?? ''), judged, e.agentId, call)
+    const verdict = await judgeCall($, config, verdicts, steps.get(e.agentId ?? ''), judgedIn(root), e.agentId, call)
     return verdict?.kind === 'violation' ? { deny: denial(verdict) } : next(e)
   })
 
   // Shell writes bypass the TDD check: send them through Write/Edit instead.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const root = await projectRoot($)
-    const targets = bashWriteTargets(e.command, path => inScope(path) && !isTestFile(path, root))
+    const targets = bashWriteTargets(e.command, judgedIn(await projectRoot($)))
     if (targets.length === 0 || !(await judging($, config, labels, e.agentId))) return next(e)
     $.ui.log(`tdd-mod: violation (bash write) ${targets.join(', ')}`, { to: 'debug' })
     return {
@@ -172,8 +171,9 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => {
-    if (!inScope(e.notebook_path) || !(await judging($, config, labels, e.agentId))) return next(e)
-    if (isTestFile(e.notebook_path, await projectRoot($))) {
+    const root = await projectRoot($)
+    if (!inScope(e.notebook_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
+    if (isTestFile(e.notebook_path, root)) {
       shown($, Date.now(), 'pass', e.notebook_path, 'test file')
       return next(e)
     }

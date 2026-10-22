@@ -55,7 +55,12 @@ or process per write.
 - **Blocks shell writes to source files** (`cat > file`, `>>`, `tee`, `sed -i`,
   `cp`, inline Python/Node writes) and tells the agent to use Write or Edit, so
   every change can be judged. Moving files (`mv`, `git mv`) is allowed, and so
-  are shell writes to test files, like Write and Edit.
+  are shell writes to test files, like Write and Edit. A path is read from the
+  folder an earlier `cd` in the command moved to, so `cd src/test/java/x &&
+  sed -i … Helper.java` is a test write. A heredoc written to a file
+  (`cat > f <<EOF`) is that file's content: paths named in it are not writes.
+- **Leaves files outside the project alone.** A write to an absolute path
+  outside the project root, such as a scratch script in `/tmp`, is not judged.
 - **Passes every write to a test file** without asking the model (`Write`,
   `Edit` and `NotebookEdit`): writing a test is the red step itself. A test file is one in a `test/`, `tests/` or
   `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`,

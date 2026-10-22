@@ -32,6 +32,12 @@ describe('bashWriteTargets', () => {
     expect(bashWriteTargets(`node -e "require('fs').writeFileSync('src/a.js', 'x')"`)).toEqual(['src/a.js'])
   })
 
+  test('a heredoc written to a file is its content, not a script: paths it names are not written', () => {
+    const repro = "cat > notes/repro.ts <<'EOF'\nimport { f } from '../src/bash.ts'\nopen(p, 'w')\nEOF"
+    expect(bashWriteTargets(repro)).toEqual(['notes/repro.ts'])
+    expect(bashWriteTargets(`tee notes/x.py <<'EOF'\nopen('src/a.py', 'w')\nEOF`)).toEqual(['notes/x.py'])
+  })
+
   test('reads, test runs and non-source targets are not writes', () => {
     expect(bashWriteTargets('npm test 2>&1 | tail -30')).toEqual([])
     expect(bashWriteTargets('cat src/a.ts && grep -n add src/a.ts')).toEqual([])

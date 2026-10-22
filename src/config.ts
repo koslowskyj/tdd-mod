@@ -119,6 +119,17 @@ export function isTestFile(path: string, root = ''): boolean {
   return TEST_FILE.test(base !== '' && posix.startsWith(`${base}/`) ? posix.slice(base.length + 1) : posix)
 }
 
+/**
+ * Whether `path` lies in the project at `root`: a relative path does, an
+ * absolute one only below the root. A scratch script in /tmp is no project
+ * code. With no root known, every path does.
+ */
+export function isInProject(path: string, root: string): boolean {
+  const posix = path.replace(/\\/g, '/')
+  const base = root.replace(/\\/g, '/').replace(/\/$/, '')
+  return base === '' || !posix.startsWith('/') || posix.startsWith(`${base}/`)
+}
+
 /** Source files the guard judges: a listed extension, outside every ignored path. */
 export function isInScope(path: string, config: Config): boolean {
   const posix = path.replace(/\\/g, '/')

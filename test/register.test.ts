@@ -156,6 +156,24 @@ describe('tool.call', () => {
     expect(seen.prompts).toEqual([])
   })
 
+  test('a write outside the project, like a scratch script in /tmp, is not judged', async ($, on) => {
+    on('session.root', () => ({ value: '/repo' }))
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    const write = await $.tool.call({ tool: 'Write', file_path: '/tmp/x/a.py', content: 'print(1)\n' })
+    const shell = await $.tool.call({ tool: 'Bash', command: "cd /tmp/x && cat > b.py <<'EOF'\nprint(1)\nEOF" })
+    expect([write.deny, shell.deny, seen.prompts.length]).toEqual([undefined, undefined, 0])
+    const inside = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'export const total = () => 3\n' })
+    expect(inside.deny).toBe('tdd-mod: no failing test')
+  })
+
+  test('a Bash command that cds into the sources and writes one is still sent to Write/Edit', async ($, on) => {
+    engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const bySed = await $.tool.call({ tool: 'Bash', command: "cd src && sed -i 's/3/4/' cart.ts" })
+    const byScript = await $.tool.call({ tool: 'Bash', command: "cd src/model && python3 - <<'EOF'\np = 'cart.ts'\nopen(p, 'w').write('x')\nEOF" })
+    const outOfTests = await $.tool.call({ tool: 'Bash', command: 'cd test && echo x > ../src/cart.ts' })
+    expect([bySed.deny, byScript.deny, outOfTests.deny].map(d => d?.match(/writes to (\S+)\./)?.[1])).toEqual(['src/cart.ts', 'src/model/cart.ts', 'src/cart.ts'])
+  })
+
   test('a Bash command that writes only test files runs, like Write and Edit', async ($, on) => {
     engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
     const byName = await $.tool.call({ tool: 'Bash', command: "sed -i 's/a/b/' service/src/test/java/a/FooTest.java" })
@@ -182,6 +200,9 @@ describe('tool.call', () => {
     ['cd into the module, module-relative path', "cd service && perl -i -pe 's/null/Map.of()/' src/test/java/tech/konnek/agent/loop/ExistingSignIns.java"],
     ['cd elsewhere, absolute path', `cd /tmp && cat > ${ROOT}/${HELPER} <<'EOF'\n${javaBody}\nEOF`],
     ['cd up, ../ path', `cd service/src && cp /tmp/x.java ../../${HELPER}`],
+    // A subagent cd'd into the test package; the path left after it has no test/ in it.
+    ['cd into the test package, package-relative path', `cd ${ROOT}/service/src/test/java/tech/konnek && sed -i 's/null/Map.of()/' agent/loop/ExistingSignIns.java`],
+    ['cd into the test package, python heredoc', `cd ${ROOT}/service/src/test/java/tech/konnek/agent/loop && python3 - <<'EOF'\np = 'ExistingSignIns.java'\ns = open(p).read()\nopen(p, 'w').write(s.replace('null', 'Map.of()'))\nEOF`],
   ]
   test('a Bash rewrite of a test helper runs, in every shape a shell rewrite takes', async ($, on) => {
     on('session.root', () => ({ value: ROOT }))
