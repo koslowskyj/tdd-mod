@@ -65,8 +65,11 @@ export const register: Register = (on, options) => {
   const agents = new Map<string, TaskKind>()
   // The coding subagents whose run has not ended, for the status line.
   const running = new Set<string>()
+  // The version in plugin.json, read at session start; none if it is unreadable.
+  let version: string | undefined
   const status = () => {
-    const main = task === 'coding' ? 'TDD on' : 'TDD off (not coding)'
+    const kind = task === 'coding' ? 'TDD on' : 'TDD off (not coding)'
+    const main = version === undefined ? kind : `tdd-mod v${version} · ${kind}`
     const n = running.size
     return n === 0 ? main : `${main} · judging ${n} subagent${n === 1 ? '' : 's'}`
   }
@@ -77,6 +80,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     for (const problem of config.problems) $.ui.log(`tdd-mod: ${problem}`)
+    version = await readVersion($)
     await $.command.register({
       name: 'tdd-eval',
       description: 'Replays the tdd-mod regression cases through the configured models.',
@@ -195,6 +199,16 @@ async function judging($: EngineInterface, config: Config, labels: Labels, agent
   if (agentId === undefined) return labels.main() === 'coding'
   const kind = labels.agents.get(agentId) ?? (await labelLateOnce($, config, labels, agentId))
   return (kind ?? labels.main()) === 'coding'
+}
+
+/** The version plugin.json names, or undefined when it cannot be read. */
+async function readVersion($: EngineInterface): Promise<string | undefined> {
+  try {
+    const { version } = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: unknown }
+    return typeof version === 'string' ? version : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** labelLate, once per agent: the pending label is stored, so writes racing in classify its brief once. */

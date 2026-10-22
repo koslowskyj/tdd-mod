@@ -20,6 +20,8 @@ const FAILED_RUN: SessionMessage[] = [
 /** One reply for every call, or one per call in order (the last repeats). */
 type World = {
   files?: Record<string, string>
+  /** The plugin.json the mod reads at session start, wherever its root is. */
+  manifest?: string
   messages?: SessionMessage[]
   /** Each subagent's own transcript, by agentId; one not listed reads `messages`. */
   agents?: Record<string, SessionMessage[] | { deny: string }>
@@ -34,7 +36,10 @@ function engine(on: On, world: World) {
   const replies = Array.isArray(world.reply) ? world.reply : [world.reply]
   const files = world.files ?? {}
   on('fs.exists', ($, e) => ({ value: e.path in files }))
-  on('fs.read', ($, e) => (e.path in files ? { value: files[e.path] ?? '' } : { deny: 'ENOENT' }))
+  on('fs.read', ($, e) => {
+    if (world.manifest !== undefined && e.path.endsWith('/.claude-plugin/plugin.json')) return { value: world.manifest }
+    return e.path in files ? { value: files[e.path] ?? '' } : { deny: 'ENOENT' }
+  })
   on('ui.log', ($, e) => {
     seen.logs.push(e.text)
     if (e.to === 'transcript') seen.transcript.push(e.text)
@@ -45,6 +50,8 @@ function engine(on: On, world: World) {
     return { value: undefined }
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.messages', ($, e) => ({ value: (e.agentId === undefined ? undefined : world.agents?.[e.agentId]) ?? world.messages ?? FAILED_RUN }))
   on('model.complete', ($, e) => {
     if (e.prompt.startsWith('Classify a request')) {
@@ -438,6 +445,13 @@ describe('task kind', () => {
     await $.prompt.submit({ ...typed, text: "I'm overriding the TDD guard for this write; let it through." })
     expect(seen.classified.length).toBe(1)
     expect(seen.status.at(-1)).toBe('TDD on')
+  })
+
+  test('the status line names the version in plugin.json', async ($, on) => {
+    const seen = engine(on, { manifest: '{"name":"tdd-mod","version":"1.2.3"}', reply: answer('{"kind":"pass","reason":""}') })
+    await $.session.start({ cwd: '/repo', surface: null, isInteractive: false })
+    await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
+    expect(seen.status.at(-1)).toBe('tdd-mod v1.2.3 · TDD on')
   })
 
   test('an unclear classifier answer keeps the guard on', async ($, on) => {

@@ -44,7 +44,8 @@ or process per write.
 - **Only on coding tasks.** Each prompt you type is labelled *coding* (adds,
   changes or fixes behaviour) or *other* (moving or renaming code, extracting,
   formatting, docs, config, questions, git). On *other* nothing is blocked. The
-  status line shows `TDD on` or `TDD off (not coding)`.
+  status line shows `TDD on` or `TDD off (not coding)`, after the mod's version
+  (`tdd-mod v<version> · TDD on`).
 - **Subagents get their own label.** A subagent (the Agent tool) is labelled
   from the brief it was spawned with, not from your last prompt: one briefed to
   implement or fix something is judged even when you asked a question or told
