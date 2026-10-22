@@ -81,6 +81,8 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     for (const problem of config.problems) $.ui.log(`tdd-mod: ${problem}`)
     version = await readVersion($)
+    // The guard is on from here, also after a reload; say so before any prompt.
+    $.ui.status(status())
     await $.command.register({
       name: 'tdd-eval',
       description: 'Replays the tdd-mod regression cases through the configured models.',
