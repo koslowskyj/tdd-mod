@@ -31,8 +31,9 @@ or process per write.
   caller in another file), the judge sees every file as they leave it
   together, once; each write of the batch gets that one verdict. Claude Code
   starts running a response's tools before the response has finished
-  streaming, so the first write waits for the rest of it, up to 3 s, and is
-  judged alone if it takes longer.
+  streaming, so the first write waits for the rest of it, up to 8 s, and is
+  judged alone if it takes longer. The wait counts against the hook's 10 s
+  budget; the judge's model calls do not.
 - **The judge sees the last test run**, however long ago: its command, whether
   it was red or green, and its output. So a fix for a failure the agent has
   already seen is judged as the green step it is.
@@ -70,6 +71,12 @@ or process per write.
   tests, a Rust `#[test]` module) without asking the model.
 - **Asks a second time before blocking**, and blocks only when both answers
   agree. If the judge can't be reached, the write is blocked (fail-closed).
+  Both are asked at once, so a block comes as soon as the slower answer does;
+  the first pass lets the write through and cuts the other call short.
+- **Says what to do next.** A block gives the judge's reason, then one fixed
+  next step chosen from the last test run: write and run a failing test, write
+  only a stub after a compile or import error, or change only what the failing
+  assertion needs.
 - **Gives an identical retry the same verdict.** A write to the same file, from
   the same content to the same content, gets the verdict it got before, without
   a model call, as long as there is no new evidence: no new test run and no new
@@ -105,12 +112,13 @@ claude --plugin-dir ~/tdd-mod
 Then give the agent a coding task. Each blocked write shows up as a tool error
 starting with `tdd-mod:`. Every decision on a write, passes included, also
 shows as a dim line in the transcript (the model does not see it), with how it
-was reached and how long the write waited for it:
+was reached, how long the write waited for it (the wait for the rest of its
+response included), and the judge's tokens:
 
 ```
-tdd-mod: pass src/cart.ts (first opinion, 2140 ms)
+tdd-mod: pass src/cart.ts (first opinion, 2140 ms, 17210 in / 46 out tokens)
 tdd-mod: pass src/cart.test.ts (test file, 0 ms)
-tdd-mod: violation src/total.ts (second opinion, 4310 ms)
+tdd-mod: violation src/total.ts (second opinion, 4310 ms, 17480 in / 92 out tokens)
 ```
 
 To see every verdict with its reason, start with `--debug` and follow the debug log:
@@ -153,6 +161,7 @@ keyed `tdd-mod@tdd-mod`; loaded with `--plugin-dir`, `tdd-mod` (or
 | `classifyTasks` | `true` | Off, every task counts as coding and every write is judged. |
 | `fastPath` | `true` | Pass a write that adds exactly one test without a model call. Faster, but a new test no longer checks for a refactor left unmade. |
 | `secondOpinion` | `true` | Block only when a second judge call agrees. |
+| `parallelOpinions` | `true` | Ask both judge calls at once: a block comes about 5 s sooner, at about twice the judge's input tokens. Off, the second is asked only after a violation. |
 | `extensions` | `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, `cjs`, `py`, `go`, `rs`, `java`, `kt`, `kts`, `scala`, `rb`, `php`, `cs`, `fs`, `swift`, `c`, `cc`, `cpp`, `h`, `hpp`, `ex`, `exs`, `erl`, `clj`, `dart`, `lua`, `ipynb`, `vue`, `svelte` | Comma-separated extensions of the files judged. |
 | `ignore` | `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/vendor/**`, `**/.git/**`, `**/.claude/**` | Comma-separated globs of paths never judged. |
 | `testPatterns` | *(empty: built-in patterns)* | How the fast path recognises a test declaration, per extension. A JSON object from comma-separated extensions to a regex; see below. |

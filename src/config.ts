@@ -9,6 +9,7 @@ export type Config = {
   classifyTasks: boolean
   fastPath: boolean
   secondOpinion: boolean
+  parallelOpinions: boolean
   extensions: ReadonlySet<string>
   ignore: readonly RegExp[]
   testPatterns: TestPatterns
@@ -96,6 +97,7 @@ export function readConfig(options: PluginOptions): Config {
     classifyTasks: flag(options.classifyTasks, true),
     fastPath: flag(options.fastPath, true),
     secondOpinion: flag(options.secondOpinion, true),
+    parallelOpinions: flag(options.parallelOpinions, true),
     extensions: new Set(list(options.extensions).map(e => e.replace(/^\./, '').toLowerCase())),
     ignore: list(options.ignore).map(globToRegExp),
     testPatterns: tests.patterns,

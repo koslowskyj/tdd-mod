@@ -56,8 +56,29 @@ export function evidenceOf(events: readonly HistoryEvent[]): string {
   return JSON.stringify([lastTestRun(events) ?? null, prompt?.kind === 'prompt' ? prompt.text : null])
 }
 
-/** `unanswered`: a violation only because the validator gave no answer, so it is no evidence to cache. */
-export type Verdict = { kind: 'pass' | 'violation'; reason: string; unanswered?: true }
+// A red that reached an assertion, not a compile or import error.
+const ASSERTION_FAILED = /\bAssertion(?:Failed)?Error\b|\bComparisonFailure\b|\bExpected:|\bexpected\b[^\n]*\b(?:received|but (?:was|got)|to (?:be|equal))\b|\bassert(?:ion)? failed\b/i
+
+/**
+ * What a blocked agent does next, from the last test run: one fixed line, so
+ * a block does not end in a retry of the same write.
+ */
+export function nextStep(run: TestRun | undefined): string {
+  const step = !run
+    ? 'Next: write a failing test for this change and run it, then make the smallest change that passes it.'
+    : !run.red
+      ? 'Next: write and run a failing test for the new behaviour first; a refactor under green must not change behaviour.'
+      : ASSERTION_FAILED.test(run.output)
+        ? 'Next: change only what the failing assertion needs, or run the test this change is for.'
+        : 'Next: write only a placeholder stub that lets the test compile or import, and rerun the tests to see its assertion fail.'
+  return `${step} The same write is blocked again until a new test run.`
+}
+
+/**
+ * `unanswered`: a violation only because the validator gave no answer, so it is no evidence to cache.
+ * `next`: what to do after a block, from the last test run.
+ */
+export type Verdict = { kind: 'pass' | 'violation'; reason: string; unanswered?: true; next?: string }
 
 // Test declarations per language, by extension. A regex stand-in for
 // probity's ast-grep matchers: the module has no Node to run ast-grep.

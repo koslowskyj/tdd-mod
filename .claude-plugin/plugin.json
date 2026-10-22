@@ -46,6 +46,12 @@
       "description": "Block a write only when a second model call agrees with the first violation.",
       "default": true
     },
+    "parallelOpinions": {
+      "type": "boolean",
+      "title": "Ask both opinions at once",
+      "description": "With a second opinion, ask both model calls at the same time instead of one after a violation: a block comes about 5 s sooner, and the first pass cuts the other call short. Costs about twice the judge's input tokens.",
+      "default": true
+    },
     "extensions": {
       "type": "string",
       "title": "Source file extensions",

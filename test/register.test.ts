@@ -1,5 +1,6 @@
 import type { AgentSpawnInput, ModelCompleteResult, On, SessionMessage, TurnStepToolUse } from 'claude-code'
 import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
+import { decide, type Complete } from '../src/guard.ts'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
 import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, parseVerdict, toHistory, trimHistory, type HistoryEvent } from '../src/tdd.ts'
@@ -74,6 +75,9 @@ function engine(on: On, world: World) {
 
 const answer = (text: string): ModelCompleteResult => ({ isAnswered: true, text, usage: USAGE })
 
+/** A denial's reason: its first line; a next step may follow it. */
+const reason = (r: { deny?: string }) => r.deny?.split('\n')[0]
+
 describe('tool.call', () => {
   test('a write the validator passes goes through', async ($, on) => {
     const seen = engine(on, { reply: answer('{"kind":"pass","reason":""}') })
@@ -85,11 +89,14 @@ describe('tool.call', () => {
   test('a violation blocks the write and tells the agent why', async ($, on) => {
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test observed"}') })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'export const total = () => 3' })
-    expect(r.deny).toBe('tdd-mod: no failing test observed')
+    expect(reason(r)).toBe('tdd-mod: no failing test observed')
     expect(seen.written).toEqual([])
   })
 
-  test('a pass needs no second opinion', async ($, on) => {
+  // One opinion after another: a parallel judge asks both at once (describe 'opinions').
+  const oneAfterAnother = { options: { parallelOpinions: false } }
+
+  test('a pass needs no second opinion', oneAfterAnother, async ($, on) => {
     const seen = engine(on, { reply: answer('{"kind":"pass","reason":""}') })
     await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
     expect(seen.prompts.length).toBe(1)
@@ -111,7 +118,7 @@ describe('tool.call', () => {
       reply: [answer('{"kind":"violation","reason":"first"}'), answer('{"kind":"violation","reason":"second"}')],
     })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
-    expect(r.deny).toBe('tdd-mod: second')
+    expect(reason(r)).toBe('tdd-mod: second')
     const parts = seen.logs.filter(l => l.includes('blocked prompt'))
     expect(parts.every(l => l.length <= 4096)).toBe(true)
     expect(parts.map(l => l.slice(l.indexOf(':\n') + 2)).join('')).toBe(seen.prompts[0])
@@ -137,14 +144,14 @@ describe('tool.call', () => {
     expect(one.deny).toBeUndefined()
     expect(seen.prompts).toEqual([])
     const builtIn = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'test("adds", () => {})\n' })
-    expect(builtIn.deny).toBe('tdd-mod: asked')
+    expect(reason(builtIn)).toBe('tdd-mod: asked')
   })
 
   test('adding two tests at once goes to the validator', async ($, on) => {
     const TEST = SRC
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"one test at a time"}') })
     const r = await $.tool.call({ tool: 'Write', file_path: TEST, content: 'test("a", () => {})\ntest("b", () => {})\n' })
-    expect(r.deny).toBe('tdd-mod: one test at a time')
+    expect(reason(r)).toBe('tdd-mod: one test at a time')
     expect(seen.prompts.length).toBe(2)
   })
 
@@ -163,7 +170,7 @@ describe('tool.call', () => {
     const shell = await $.tool.call({ tool: 'Bash', command: "cd /tmp/x && cat > b.py <<'EOF'\nprint(1)\nEOF" })
     expect([write.deny, shell.deny, seen.prompts.length]).toEqual([undefined, undefined, 0])
     const inside = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'export const total = () => 3\n' })
-    expect(inside.deny).toBe('tdd-mod: no failing test')
+    expect(reason(inside)).toBe('tdd-mod: no failing test')
   })
 
   test('a Bash command that cds into the sources and writes one is still sent to Write/Edit', async ($, on) => {
@@ -238,11 +245,18 @@ describe('tool.call', () => {
     await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
     await $.tool.call({ tool: 'Write', file_path: '/repo/src/cart.test.ts', content: 'x' })
     await $.tool.call({ tool: 'Write', file_path: '/repo/src/total.ts', content: 'y' })
-    expect(seen.transcript.map(l => l.replace(/\d+ ms/, 'N ms'))).toEqual([
-      `tdd-mod: pass ${SRC} (first opinion, N ms)`,
+    expect(seen.transcript.map(l => l.replace(/\d+ ms/, 'N ms').replace(/\d+ in \/ \d+ out/, 'I in / O out'))).toEqual([
+      `tdd-mod: pass ${SRC} (first opinion, N ms, I in / O out tokens)`,
       'tdd-mod: pass /repo/src/cart.test.ts (test file, N ms)',
-      'tdd-mod: violation /repo/src/total.ts (second opinion, N ms)',
+      'tdd-mod: violation /repo/src/total.ts (second opinion, N ms, I in / O out tokens)',
     ])
+  })
+
+  test("a decision's line shows the judge's input and output tokens", oneAfterAnother, async ($, on) => {
+    const usage = { ...USAGE, input_tokens: 8500, output_tokens: 40 }
+    const seen = engine(on, { reply: [{ isAnswered: true, text: '{"kind":"violation","reason":"r"}', usage }, { isAnswered: true, text: '{"kind":"violation","reason":"r"}', usage }] })
+    await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
+    expect(seen.transcript.at(-1)?.replace(/\d+ ms/, 'N ms')).toBe(`tdd-mod: violation ${SRC} (second opinion, N ms, 17000 in / 80 out tokens)`)
   })
 
   test('an identical retry with nothing new in the session gets the same verdict without a model call', async ($, on) => {
@@ -254,7 +268,7 @@ describe('tool.call', () => {
     expect(seen.transcript.at(-1)?.replace(/\d+ ms/, 'N ms')).toBe(`tdd-mod: violation ${SRC} (cached, N ms)`)
   })
 
-  test('a retry after the validator gave no answer asks it again', async ($, on) => {
+  test('a retry after the validator gave no answer asks it again', oneAfterAnother, async ($, on) => {
     const none = { isAnswered: false, reason: 'aborted', usage: USAGE } as const
     const seen = engine(on, { reply: [none, none, answer('{"kind":"pass","reason":""}')] })
     const first = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
@@ -305,7 +319,7 @@ describe('tool.call', () => {
     const edit = (notebook_path: string) => $.tool.call({ tool: 'NotebookEdit', notebook_path, new_source: 'x' })
     const test = await edit('/repo/test/cart.ipynb')
     const source = await edit('/repo/src/cart.ipynb')
-    expect([test.deny, source.deny]).toEqual([undefined, 'tdd-mod: no failing test'])
+    expect([reason(test), reason(source)]).toEqual([undefined, 'tdd-mod: no failing test'])
     expect(seen.prompts.length).toBe(2)
   })
 
@@ -315,7 +329,7 @@ describe('tool.call', () => {
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test"}') })
     const source = await $.tool.call({ tool: 'Write', file_path: `${ROOT}/src/cart.ts`, content: 'x' })
     const test = await $.tool.call({ tool: 'Write', file_path: `${ROOT}/test/cart.ts`, content: 'x' })
-    expect([source.deny, test.deny]).toEqual(['tdd-mod: no failing test', undefined])
+    expect([reason(source), reason(test)]).toEqual(['tdd-mod: no failing test', undefined])
     expect(seen.prompts.length).toBe(2)
   })
 
@@ -334,7 +348,7 @@ describe('tool.call', () => {
     const seen = engine(on, { reply: answer('{"kind":"violation","reason":"no failing test"}') })
     const migration = await $.tool.call({ tool: 'Write', file_path: MIGRATION, content: 'alter table x add name text;' })
     const api = await $.tool.call({ tool: 'Write', file_path: OPENAPI, content: 'openapi: 3.1.0' })
-    expect([migration.deny, api.deny]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+    expect([reason(migration), reason(api)]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
   })
 
   test('files out of scope skip the validator', async ($, on) => {
@@ -394,7 +408,7 @@ describe('task kind', () => {
     const seen = engine(on, { task: ['coding'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
     await $.prompt.submit({ ...typed, text: 'add a total to the cart' })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
     expect(seen.status.at(-1)).toBe('TDD on')
   })
 
@@ -414,7 +428,7 @@ describe('task kind', () => {
     await $.prompt.submit({ ...typed, text: 'rename add to sum' })
     await $.prompt.submit({ ...typed, text: 'now support negative numbers' })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
     expect(seen.classified[1]).toContain('The previous request was labelled other')
   })
 
@@ -430,7 +444,7 @@ describe('task kind', () => {
     engine(on, { task: ['hmm'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
     await $.prompt.submit({ ...typed, text: 'do the thing' })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'x' })
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
   })
 })
 
@@ -455,7 +469,7 @@ describe('subagents', () => {
     await $.prompt.submit({ ...typed, text: 'spawn an agent that implements the cart total test-first' })
     const { agentId } = await $.agent.spawn(brief('Implement the cart total test-first.'))
     const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
   })
 
   test('a subagent briefed to explore is not judged while the main task is coding', async ($, on) => {
@@ -471,7 +485,7 @@ describe('subagents', () => {
     const seen = engine(on, { task: ['other'], reply: answer('{"kind":"violation","reason":"no failing test"}') })
     const { agentId } = await $.agent.spawn(brief('Find where the cart is priced and report the files.'))
     const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
     expect(seen.classified).toEqual([])
   })
 
@@ -503,7 +517,7 @@ describe('subagents', () => {
     const { agentId } = await $.agent.spawn(brief('Implement the cart total test-first.'))
     await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-1', agentId, reason: 'answer' })
     const r = await $.tool.call(inAgent(agentId, { tool: 'Write', file_path: SRC, content: 'x' }))
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
   })
 })
 
@@ -529,7 +543,7 @@ describe('subagents labelled late', () => {
     const seen = engine(on, { task: ['other', 'coding'], agents: briefed('Implement the cart\ntotal test-first.'), reply: answer('{"kind":"violation","reason":"no failing test"}') })
     await $.prompt.submit({ ...typed, text: 'commit the work' })
     const r = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
-    expect(r.deny).toBe('tdd-mod: no failing test')
+    expect(reason(r)).toBe('tdd-mod: no failing test')
     expect(seen.logs).toContain(`tdd-mod: subagent ${OLD} labelled late (coding): Implement the cart total test-first.`)
   })
 
@@ -556,7 +570,7 @@ describe('subagents labelled late', () => {
     const write = (file_path: string) => $.tool.call(inAgent(OLD, { tool: 'Write', file_path, content: 'x' }))
     const [a, b] = await Promise.all([write(SRC), write('/repo/src/total.ts')])
     await write('/repo/src/price.ts')
-    expect([a.deny, b.deny]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+    expect([reason(a), reason(b)]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
     expect(seen.classified.length).toBe(2)
   })
 
@@ -571,7 +585,7 @@ describe('subagents labelled late', () => {
       const judged = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
       await $.prompt.submit({ ...typed, text: 'commit the work' })
       const passed = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'y' }))
-      expect([judged.deny, passed.deny]).toEqual(['tdd-mod: no failing test', undefined])
+      expect([reason(judged), reason(passed)]).toEqual(['tdd-mod: no failing test', undefined])
       expect(seen.logs).toContain(`tdd-mod: subagent ${OLD} has no brief to label; it follows the main task`)
     })
   }
@@ -585,7 +599,7 @@ describe('subagents labelled late', () => {
       const seen = engine(on, { task: ['other', failure], agents: briefed('Find where the cart is priced.'), reply: answer('{"kind":"violation","reason":"no failing test"}') })
       await $.prompt.submit({ ...typed, text: 'commit the work' })
       const r = await $.tool.call(inAgent(OLD, { tool: 'Write', file_path: SRC, content: 'x' }))
-      expect(r.deny).toBe('tdd-mod: no failing test')
+      expect(reason(r)).toBe('tdd-mod: no failing test')
       expect(seen.logs.some(l => l.startsWith(`tdd-mod: subagent ${OLD} not classified (`) && l.includes(why) && l.endsWith('); judged as coding'))).toBe(true)
     })
   }
@@ -601,11 +615,13 @@ describe('subagents labelled late', () => {
 })
 
 describe('batches', () => {
+  // Judged once: one model call, with the opinions asked one after another.
+  const once = { options: { parallelOpinions: false } }
   const CART = 'class Cart {\n}\nconst cart = new Cart()\n'
   const addMethod = { tool: 'Edit', file_path: SRC, old_string: '{\n}', new_string: '{\n  total() { return 3 }\n}' } as const
   const addCall = { tool: 'Edit', file_path: SRC, old_string: 'new Cart()\n', new_string: 'new Cart()\ncart.total()\n' } as const
 
-  test('edits sent in one response are judged once, on the file they leave together', async ($, on) => {
+  test('edits sent in one response are judged once, on the file they leave together', once, async ($, on) => {
     const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
     await respond($, on, [use(addMethod), use(addCall)])
     const first = await $.tool.call(addMethod)
@@ -626,7 +642,7 @@ describe('batches', () => {
     await respond($, on, [use(signature), use(caller)])
     const first = await $.tool.call(signature)
     const second = await $.tool.call(caller)
-    expect([first.deny, second.deny]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+    expect([reason(first), reason(second)]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
     expect(seen.prompts.length).toBe(2)
     expect(seen.prompts[0]).toContain(`File: ${SRC}\n\nclass Cart { total(tax: number) { return 3 } }\n`)
     expect(seen.prompts[0]).toContain(`File: ${CALLER}\n\npay(cart.total(0.2))\n`)
@@ -646,7 +662,7 @@ describe('batches', () => {
   test('a function body after an import-error red still reaches the judge and is denied', async ($, on) => {
     const seen = engine(on, { messages: IMPORT_RED, reply: answer('{"kind":"violation","reason":"stub first"}') })
     const r = await $.tool.call(body)
-    expect(r.deny).toBe('tdd-mod: stub first')
+    expect(reason(r)).toBe('tdd-mod: stub first')
     expect(seen.prompts[0]).toContain('`npm test` was red: a test failed.')
     expect(seen.prompts[0]).not.toContain('The tests are green')
   })
@@ -657,7 +673,7 @@ describe('batches', () => {
     await respond($, on, [use(testFile), use(body)])
     const red = await $.tool.call(testFile)
     const green = await $.tool.call(body)
-    expect([red.deny, green.deny]).toEqual([undefined, 'tdd-mod: stub first'])
+    expect([reason(red), reason(green)]).toEqual([undefined, 'tdd-mod: stub first'])
     expect(seen.prompts.length).toBe(2)
   })
 
@@ -676,7 +692,7 @@ describe('batches', () => {
     return { finish: () => (finish(), drained) }
   }
 
-  test('a write that runs while its response still streams waits for the whole response', async ($, on) => {
+  test('a write that runs while its response still streams waits for the whole response', once, async ($, on) => {
     const clock = mock.clock(on)
     const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
     const response = streaming($, on, [use(addMethod), use(addCall)])
@@ -690,16 +706,131 @@ describe('batches', () => {
     expect(seen.prompts.length).toBe(1)
   })
 
-  test('a response that does not end within 3 s leaves the write to be judged alone', async ($, on) => {
+  // In real sessions half of the multi-write responses still streamed at 3 s.
+  test('a response that ends 5 s after its first write is judged once, as a batch', once, async ($, on) => {
     const clock = mock.clock(on)
     const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
     const response = streaming($, on, [use(addMethod), use(addCall)])
     await clock.settle()
     const first = $.tool.call(addMethod)
-    await clock.advance(3000)
+    await clock.advance(5000)
+    await response.finish()
+    expect((await first).deny).toBeUndefined()
+    await $.tool.call(addCall)
+    expect(seen.prompts.length).toBe(1)
+  })
+
+  test('the logged latency includes the wait for the response', async ($, on) => {
+    const clock = mock.clock(on)
+    const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
+    const response = streaming($, on, [use(addMethod), use(addCall)])
+    await clock.settle()
+    const first = $.tool.call(addMethod)
+    await clock.advance(2000)
+    await response.finish()
+    await first
+    const ms = Number(seen.transcript[0]?.match(/first opinion, (\d+) ms/)?.[1])
+    expect(ms).toBeGreaterThanOrEqual(2000)
+  })
+
+  test('a response that does not end within 8 s leaves the write to be judged alone', async ($, on) => {
+    const clock = mock.clock(on)
+    const seen = engine(on, { files: { [SRC]: CART }, reply: answer('{"kind":"pass","reason":""}') })
+    const response = streaming($, on, [use(addMethod), use(addCall)])
+    await clock.settle()
+    const first = $.tool.call(addMethod)
+    await clock.advance(8000)
     expect((await first).deny).toBeUndefined()
     expect(seen.prompts[0]).toContain(`File: ${SRC}\n\nclass Cart {\n  total() { return 3 }\n}\nconst cart = new Cart()\n\n`)
     await response.finish()
+  })
+})
+
+// Back-to-back blocks on one file mostly came with no test run between them:
+// the denial says what to do next, chosen from the last test run.
+describe('next steps', () => {
+  const asked: SessionMessage = { role: 'user', text: 'add a total to the cart', toolUses: [] }
+  const ran = (text: string, isError?: true): SessionMessage => ({
+    role: 'assistant',
+    text: '',
+    toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'npm test' }, text, ...(isError && { isError }) }],
+  })
+  const blocked = async ($: Engine, on: On, messages: SessionMessage[]) => {
+    engine(on, { messages, reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'export const total = () => 3\n' })
+    return r.deny?.split('\n').slice(1).join('\n') ?? ''
+  }
+
+  test('with no test run yet, write and run a failing test first', async ($, on) => {
+    expect(await blocked($, on, [asked])).toContain('Next: write a failing test for this change and run it')
+  })
+
+  test('after a red without an assertion, a stub is enough', async ($, on) => {
+    const next = await blocked($, on, [asked, ran("Exit code 1\nERR_MODULE_NOT_FOUND './cart.ts'\nnot ok 1", true)])
+    expect(next).toContain('Next: write only a placeholder stub')
+  })
+
+  test('after a failing assertion, change only what it needs', async ($, on) => {
+    expect(await blocked($, on, FAILED_RUN)).toContain('Next: change only what the failing assertion needs')
+  })
+
+  test('after a green run, the new behaviour needs its failing test first', async ($, on) => {
+    expect(await blocked($, on, [asked, ran('# pass 3\n# fail 0')])).toContain('Next: write and run a failing test for the new behaviour')
+  })
+
+  test('every block says the same write is blocked again until a new test run', async ($, on) => {
+    expect(await blocked($, on, FAILED_RUN)).toContain('blocked again until a new test run')
+  })
+})
+
+describe('opinions', () => {
+  type Call = { prompt: string; signal?: AbortSignal; reply: (r: ModelCompleteResult) => void }
+  /** A judge whose replies wait until the test sends them, call by call. */
+  function heldJudge() {
+    const calls: Call[] = []
+    const complete: Complete = (request, options) =>
+      new Promise(reply => {
+        calls.push({ prompt: request.prompt, signal: options?.signal, reply })
+        options?.signal?.addEventListener('abort', () => reply({ isAnswered: false, reason: 'aborted' } as ModelCompleteResult))
+      })
+    return { calls, complete }
+  }
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+  }
+  const absent = { kind: 'absent' } as const
+  const write = { path: '/repo/src/cart.ts', content: 'export const total = () => 3\n' }
+  const violation = answer('{"kind":"violation","reason":"no failing test"}')
+  const pass = answer('{"kind":"pass","reason":""}')
+
+  test('both opinions are asked at once, and a block still needs both', async () => {
+    const judge = heldJudge()
+    const decision = decide(judge.complete, readConfig({}), async () => [], absent, write)
+    await flush()
+    expect(judge.calls.length).toBe(2)
+    judge.calls[0]?.reply(violation)
+    judge.calls[1]?.reply(violation)
+    expect((await decision).opinions.map(o => o.kind)).toEqual(['violation', 'violation'])
+  })
+
+  test('a pass does not wait for the other opinion, which is aborted', async () => {
+    const judge = heldJudge()
+    const decision = decide(judge.complete, readConfig({}), async () => [], absent, write)
+    await flush()
+    judge.calls[1]?.reply(pass)
+    expect((await decision).verdict.kind).toBe('pass')
+    expect(judge.calls[0]?.signal?.aborted).toBe(true)
+  })
+
+  test('with parallelOpinions off the second opinion is asked only after a violation', async () => {
+    const judge = heldJudge()
+    const decision = decide(judge.complete, readConfig({ parallelOpinions: false }), async () => [], absent, write)
+    await flush()
+    expect(judge.calls.length).toBe(1)
+    judge.calls[0]?.reply(violation)
+    await flush()
+    judge.calls[1]?.reply(pass)
+    expect((await decision).opinions.map(o => o.kind)).toEqual(['violation', 'pass'])
   })
 })
 

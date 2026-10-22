@@ -3,16 +3,18 @@ import { bashWriteTargets } from './bash.ts'
 import { applyCalls, batchFor, filesOf, type WriteCall } from './batch.ts'
 import { isInProject, isInScope, isTestFile, readConfig, type Config } from './config.ts'
 import { runEval } from './eval.ts'
-import { classifyTask, decide, type Complete, type Pending } from './guard.ts'
+import { classifyTask, decide, type Complete, type Pending, type Usage } from './guard.ts'
 import { isGuardInstruction, type TaskKind } from './task.ts'
-import { evidenceOf, toHistory, type Change, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
+import { evidenceOf, lastTestRun, nextStep, toHistory, type Change, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
 
 // $.ui.log refuses a line over 4096 characters; leave room for the header.
 const LOG_CHUNK = 3800
 // The engine runs a tool while the rest of its response still streams in; a
 // write waits this long for the whole response, so it is judged with the
-// writes sent beside it. Well inside a hook's 10 s budget.
-const BATCH_WAIT_MS = 3000
+// writes sent beside it. The wait counts against the hook's 10 s budget (the
+// `$` calls before it and the model calls after it do not), and a hook past
+// it is skipped, its write let through: 8 s leaves 2 s for the hook's own code.
+const BATCH_WAIT_MS = 8000
 
 /**
  * `byEvidence`: verdicts by write and evidence, so an identical retry with
@@ -85,7 +87,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'tdd-eval' }, async ($, e) => {
     const runs = Math.max(1, Math.min(10, Number.parseInt(e.args, 10) || 3))
-    const complete: Complete = request => $.model.complete(request)
+    const complete: Complete = (request, options) => $.model.complete(request, options)
     const root = $.plugin.root
     const text = await runEval(complete, file => $.fs.read(`${root}/eval/${file}`), config, runs)
     return { text }
@@ -138,7 +140,7 @@ export const register: Register = (on, options) => {
     const root = await projectRoot($)
     if (!inScope(e.file_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.file_path, root)) {
-      shown($, Date.now(), 'pass', e.file_path, 'test file')
+      await shown($, await now($), 'pass', e.file_path, 'test file')
       return next(e)
     }
     const call: WriteCall = { tool: 'Write', file_path: e.file_path, content: e.content }
@@ -150,7 +152,7 @@ export const register: Register = (on, options) => {
     const root = await projectRoot($)
     if (!inScope(e.file_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.file_path, root)) {
-      shown($, Date.now(), 'pass', e.file_path, 'test file')
+      await shown($, await now($), 'pass', e.file_path, 'test file')
       return next(e)
     }
     const call: WriteCall = { tool: 'Edit', file_path: e.file_path, old_string: e.old_string, new_string: e.new_string, replace_all: e.replace_all }
@@ -174,15 +176,16 @@ export const register: Register = (on, options) => {
     const root = await projectRoot($)
     if (!inScope(e.notebook_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.notebook_path, root)) {
-      shown($, Date.now(), 'pass', e.notebook_path, 'test file')
+      await shown($, await now($), 'pass', e.notebook_path, 'test file')
       return next(e)
     }
+    const started = await now($)
     const before = await readBefore($, e.notebook_path)
     const mode = e.edit_mode ?? 'replace'
     const content =
       `Notebook cell edit (${mode}) on cell ${e.cell_id ?? '(first)'}` +
       `${e.cell_type ? `, type ${e.cell_type}` : ''}. New cell source:\n\n${e.new_source}`
-    const verdict = await judgeWrite($, config, verdicts, e.agentId, before, { path: e.notebook_path, content })
+    const verdict = await judgeWrite($, config, verdicts, started, e.agentId, before, { path: e.notebook_path, content })
     return verdict.kind === 'pass' ? next(e) : { deny: denial(verdict) }
   })
 }
@@ -271,11 +274,12 @@ async function judgeCall(
   agentId: string | undefined,
   call: WriteCall,
 ): Promise<Verdict | undefined> {
-  const started = Date.now()
+  // From the write's call, so the wait for its response counts in the logged latency.
+  const started = await now($)
   const batch = step && (await wholeResponse($, step)) ? batchFor(step.uses, call, judged) : [call]
   if (batch.length > 1 && step?.verdict) {
     const verdict = await step.verdict
-    shown($, started, verdict.kind, call.file_path, `batch of ${batch.length}`)
+    await shown($, started, verdict.kind, call.file_path, `batch of ${batch.length}`)
     return verdict
   }
   const together = batch.length > 1 ? await changesOf($, batch, call) : undefined
@@ -283,7 +287,7 @@ async function judgeCall(
   const changes = together ?? (await changesOf($, [call], call))
   const [main, ...also] = changes ?? []
   if (main === undefined) return undefined
-  const verdict = judgeWrite($, config, verdicts, agentId, main.before, { path: main.path, content: main.content }, also)
+  const verdict = judgeWrite($, config, verdicts, started, agentId, main.before, { path: main.path, content: main.content }, also)
   if (together && step) step.verdict = verdict
   return verdict
 }
@@ -323,34 +327,36 @@ async function judgeWrite(
   $: EngineInterface,
   config: Config,
   verdicts: Verdicts,
+  started: number,
   agentId: string | undefined,
   before: FileContent,
   pending: Pending,
   also: readonly Change[] = [],
 ): Promise<Verdict> {
-  const started = Date.now()
   const history = await recentHistory($, agentId)
   // The write (who, where, from what to what), and that write with the evidence its verdict rests on.
   const write = `${pending.path} ${hash(JSON.stringify([agentId ?? null, before, pending.content, also]))}`
   const key = `${write} ${hash(evidenceOf(history))}`
   const cached = verdicts.byEvidence.get(key)
   if (cached) {
-    shown($, started, cached.kind, pending.path, 'cached')
+    await shown($, started, cached.kind, pending.path, 'cached')
     return cached
   }
-  const complete: Complete = request => $.model.complete(request)
+  const complete: Complete = (request, options) => $.model.complete(request, options)
   const decision = await decide(complete, config, async () => history, before, pending, also)
   const which = (i: number) => (decision.fastPath ? 'fast path: one new test' : i === 0 ? 'first opinion' : 'second opinion')
   decision.opinions.forEach((verdict, i) => log($, verdict, pending, which(i)))
   if (decision.verdict.kind === 'violation' && decision.prompt) logPrompt($, decision.prompt, pending)
-  shown($, started, decision.verdict.kind, pending.path, which(decision.opinions.length - 1))
+  await shown($, started, decision.verdict.kind, pending.path, which(decision.opinions.length - 1), decision.usage)
   const previous = verdicts.byWrite.get(write)
   if (previous !== undefined && previous !== decision.verdict.kind) {
     $.ui.log(`tdd-mod: verdict reversed on retry (${previous} → ${decision.verdict.kind}) ${pending.path}`, { to: 'debug' })
   }
-  if (!decision.verdict.unanswered) verdicts.byEvidence.set(key, decision.verdict)
-  verdicts.byWrite.set(write, decision.verdict.kind)
-  return decision.verdict
+  // A block the judge answered says what to do next; a missing answer already says retry.
+  const verdict = decision.verdict.kind === 'violation' && !decision.verdict.unanswered ? { ...decision.verdict, next: nextStep(lastTestRun(history)) } : decision.verdict
+  if (!verdict.unanswered) verdicts.byEvidence.set(key, verdict)
+  verdicts.byWrite.set(write, verdict.kind)
+  return verdict
 }
 
 /** cyrb53: a fast 53-bit string hash, so the verdict cache keeps no file contents. */
@@ -368,8 +374,18 @@ function hash(text: string): number {
 }
 
 /** One transcript line per decision, passes included, with how it was reached and how long it took. */
-function shown($: EngineInterface, started: number, kind: Verdict['kind'], path: string, how: string): void {
-  $.ui.log(`tdd-mod: ${kind} ${path} (${how}, ${Date.now() - started} ms)`)
+async function shown($: EngineInterface, started: number, kind: Verdict['kind'], path: string, how: string, usage?: Usage): Promise<void> {
+  const tokens = usage && usage.input + usage.output > 0 ? `, ${usage.input} in / ${usage.output} out tokens` : ''
+  $.ui.log(`tdd-mod: ${kind} ${path} (${how}, ${(await now($)) - started} ms${tokens})`)
+}
+
+/** The host's time, the one the batch wait runs on; the process's when the host has none. */
+async function now($: EngineInterface): Promise<number> {
+  try {
+    return await $.clock.now()
+  } catch {
+    return Date.now()
+  }
 }
 
 /** The agent's whole session: buildPrompt shows its recent part and its last test run. */
@@ -398,5 +414,5 @@ function excerpt(text: string): string {
 }
 
 function denial(verdict: Verdict): string {
-  return `tdd-mod: ${verdict.reason}`
+  return verdict.next ? `tdd-mod: ${verdict.reason}\n${verdict.next}` : `tdd-mod: ${verdict.reason}`
 }
