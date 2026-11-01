@@ -990,6 +990,24 @@ describe('tdd logic', () => {
     expect(lastTestRun([run('git status', ''), run('cat test/a.ts', 'FAIL')])).toBeUndefined()
   })
 
+  test('lastTestRun reads a run whose output went to a log from the commands that read the log', () => {
+    const run = (command: string, output: string) => ({ kind: 'tool', tool: 'Bash', input: { command }, output }) as const
+    const mvn = 'mvn -q test -Dtest=CartIT > .local/t.log 2>&1; echo rc=$?'
+    const read = 'grep -E "Tests run|expected" .local/t.log'
+    expect(lastTestRun([run(mvn, 'rc=1'), run('ls src', 'a.ts'), run(read, 'Tests run: 3, Failures: 1')])).toEqual({
+      command: mvn,
+      output: `rc=1\n$ ${read}\nTests run: 3, Failures: 1`,
+      red: true,
+    })
+    // The exit code the agent echoes is the run's own.
+    expect(lastTestRun([run('npx vitest run > out.log 2>&1; echo rc=$?', 'rc=1')])?.red).toBe(true)
+    expect(lastTestRun([run('npx vitest run > out.log 2>&1; echo exit=$?', 'exit=0')])?.red).toBe(false)
+    // A failure read from the log is red, though the run itself printed nothing.
+    expect(lastTestRun([run('mvn verify | tee build/v.log > /dev/null', ''), run('tail -5 build/v.log', 'Tests run: 4, Failures: 0, Errors: 1')])?.red).toBe(true)
+    // Another file's content is not the run's.
+    expect(lastTestRun([run('npm test > a.log 2>&1; echo rc=$?', 'rc=0'), run('cat b.log', 'FAIL')])).toEqual({ command: 'npm test > a.log 2>&1; echo rc=$?', output: 'rc=0', red: false })
+  })
+
   test('evidenceOf changes with a new test run or prompt, not with other tool calls', () => {
     const base = toHistory(FAILED_RUN)
     const read = { kind: 'tool', tool: 'Read', input: {}, output: 'x' } as const

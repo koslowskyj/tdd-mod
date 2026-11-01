@@ -32,16 +32,34 @@ const TEST_COMMAND = new RegExp(
   ].join('|'),
 )
 // What a failing run prints, also when a pipe (`| tail`) hid its exit code.
+// An exit code the agent echoes after a run (`echo rc=$?`) counts too.
 const RED_OUTPUT =
-  /^Exit code [1-9]|\bFAIL|\b[1-9]\d* (?:fail|failed|failing|failures?|errors?)\b|\b(?:Failures|Errors): [1-9]|^# fail [1-9]|^not ok \d|\bAssertionError\b|\bpanicked\b/m
+  /^Exit code [1-9]|\b(?:rc|exit|status)=[1-9]|\bFAIL|\b[1-9]\d* (?:fail|failed|failing|failures?|errors?)\b|\b(?:Failures|Errors): [1-9]|^# fail [1-9]|^not ok \d|\bAssertionError\b|\bpanicked\b/m
+// The file a command sends its output to: `> f`, `>> f`, `2>&1 > f`, `&> f`, `| tee f`.
+const LOG_TARGET = /(?:(?:^|[^-=<>&\d])(?:\d|&)?>>?(?!&)|\btee(?:\s+-a)?)\s*(['"]?)([^\s;|&<>'"()]+)\1/g
 
+function commandOf(event: HistoryEvent | undefined): string | undefined {
+  if (event?.kind !== 'tool' || event.tool !== 'Bash') return undefined
+  const command = (event.input as { command?: unknown } | null)?.command
+  return typeof command === 'string' ? command : undefined
+}
+
+/**
+ * The latest test run. A run whose output went to a log (`mvn test > t.log;
+ * echo rc=$?`) is read with the later commands that read that log.
+ */
 export function lastTestRun(events: readonly HistoryEvent[]): TestRun | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]
-    if (event?.kind !== 'tool' || event.tool !== 'Bash') continue
-    const command = (event.input as { command?: unknown } | null)?.command
-    if (typeof command !== 'string' || !TEST_COMMAND.test(command)) continue
-    return { command, output: event.output, red: event.isError === true || RED_OUTPUT.test(event.output) }
+    const command = commandOf(event)
+    if (event?.kind !== 'tool' || command === undefined || !TEST_COMMAND.test(command)) continue
+    const logs = [...command.matchAll(LOG_TARGET)].map(m => m[2] ?? '').filter(log => log !== '' && !log.startsWith('/dev/'))
+    const reads = events.slice(i + 1).flatMap(later => {
+      const read = commandOf(later)
+      return later.kind === 'tool' && read !== undefined && logs.some(log => read.includes(log)) ? [`$ ${read}\n${later.output}`] : []
+    })
+    const output = [event.output, ...reads].join('\n')
+    return { command, output, red: event.isError === true || RED_OUTPUT.test(output) }
   }
   return undefined
 }

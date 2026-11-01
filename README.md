@@ -36,7 +36,9 @@ or process per write.
   budget; the judge's model calls do not.
 - **The judge sees the last test run**, however long ago: its command, whether
   it was red or green, and its output. So a fix for a failure the agent has
-  already seen is judged as the green step it is.
+  already seen is judged as the green step it is. A run whose output went to
+  a log (`mvn test > t.log 2>&1; echo rc=$?`) is read together with the later
+  commands that read that log, and an echoed non-zero `rc=`/`exit=` is red.
 - **Refactors pass while green.** When the last test run was green, the judge
   is told that this may be the refactor step: extracting a helper from existing
   code, inlining, renaming, or removing unused code passes without a new
