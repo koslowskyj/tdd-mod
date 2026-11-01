@@ -3,7 +3,7 @@ import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 import { decide, type Complete } from '../src/guard.ts'
 import { buildTaskPrompt, isGuardInstruction, parseTaskKind } from '../src/task.ts'
 import { globToRegExp, isInScope, isTestFile, readConfig, readTestPatterns } from '../src/config.ts'
-import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, parseVerdict, toHistory, trimHistory, type HistoryEvent } from '../src/tdd.ts'
+import { addsExactlyOneTest, applyEdit, buildPrompt, evidenceOf, lastTestRun, nextStep, parseVerdict, toHistory, trimHistory, type HistoryEvent } from '../src/tdd.ts'
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const SRC = '/repo/src/cart.ts'
@@ -988,6 +988,20 @@ describe('tdd logic', () => {
     expect(red('npm test 2>&1 | tail -30', 'not ok 1 - src/a.test.ts\n# pass 0\n# fail 1')).toBe(true)
     expect(red('npm test 2>&1 | tail -30', 'ok 1 - src/a.test.ts\n# pass 1\n# fail 0')).toBe(false)
     expect(lastTestRun([run('git status', ''), run('cat test/a.ts', 'FAIL')])).toBeUndefined()
+  })
+
+  test('nextStep tells a failed assertion from a compile error in Playwright, AssertJ and Surefire output', () => {
+    const after = (output: string) => nextStep({ command: 'mvn test', output, red: true })
+    const assertion = 'Next: change only what the failing assertion needs'
+    const stub = 'Next: write only a placeholder stub'
+    expect(after('com.microsoft.playwright.TimeoutError: Timeout 30000ms exceeded.')).toContain(assertion)
+    expect(after('page.click: Timeout 5000ms exceeded.\n=========================== logs')).toContain(assertion)
+    expect(after('java.lang.AssertionError: \nExpecting actual:\n  "a"\nto contain:\n  "b"')).toContain(assertion)
+    expect(after('org.awaitility.core.ConditionTimeoutException: Condition was not fulfilled within 5 seconds.')).toContain(assertion)
+    expect(after('[ERROR] Tests run: 3, Failures: 1, Errors: 0, Skipped: 0')).toContain(assertion)
+    expect(after('[ERROR] COMPILATION ERROR :\n[ERROR] Cart.java:[3,8] cannot find symbol')).toContain(stub)
+    expect(after('TypeError: variables.deleteVariable is not a function')).toContain(stub)
+    expect(after('[ERROR] Tests run: 3, Failures: 0, Errors: 1\njava.lang.NullPointerException')).toContain(stub)
   })
 
   test('lastTestRun does not take a lint goal or a build that skips the tests for a test run', () => {

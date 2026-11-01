@@ -83,8 +83,11 @@ export function evidenceOf(events: readonly HistoryEvent[]): string {
   return JSON.stringify([lastTestRun(events) ?? null, prompt?.kind === 'prompt' ? prompt.text : null])
 }
 
-// A red that reached an assertion, not a compile or import error.
-const ASSERTION_FAILED = /\bAssertion(?:Failed)?Error\b|\bComparisonFailure\b|\bExpected:|\bexpected\b[^\n]*\b(?:received|but (?:was|got)|to (?:be|equal))\b|\bassert(?:ion)? failed\b/i
+// A red that reached an assertion, not a compile or import error. A UI test's
+// wait that timed out (Playwright, Awaitility) is its assertion failing, and
+// Surefire counts failed assertions as Failures, thrown errors as Errors.
+const ASSERTION_FAILED =
+  /\bAssertion(?:Failed)?Error\b|\bComparisonFailure\b|\bExpected:|\bexpected\b[^\n]*\b(?:received|but (?:was|got)|to (?:be|equal))\b|\bassert(?:ion)? failed\b|\bExpecting (?:actual|value)\b|\bTimeout \d+ms exceeded\b|\bTimeoutError\b|\bConditionTimeoutException\b|\bFailures: [1-9]/i
 
 /**
  * What a blocked agent does next, from the last test run: one fixed line, so
