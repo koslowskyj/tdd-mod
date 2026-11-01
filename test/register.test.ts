@@ -990,6 +990,21 @@ describe('tdd logic', () => {
     expect(lastTestRun([run('git status', ''), run('cat test/a.ts', 'FAIL')])).toBeUndefined()
   })
 
+  test('lastTestRun does not take a lint goal or a build that skips the tests for a test run', () => {
+    const run = (command: string) => ({ kind: 'tool', tool: 'Bash', input: { command }, output: 'BUILD SUCCESS' }) as const
+    const isRun = (command: string) => lastTestRun([run(command)]) !== undefined
+    expect(isRun('mvn -B -q pmd:check')).toBe(false)
+    expect(isRun('mvn -pl service compile spotbugs:check checkstyle:check')).toBe(false)
+    expect(isRun('mvn -pl service test-compile')).toBe(false)
+    expect(isRun('mvn -q -DskipTests install')).toBe(false)
+    expect(isRun('./mvnw verify -Dmaven.test.skip=true')).toBe(false)
+    expect(isRun('./gradlew build -x test')).toBe(false)
+    expect(isRun('mvn -q -pl service test -Dtest=CartIT')).toBe(true)
+    expect(isRun('mvn -pl service test-compile pmd:check verify')).toBe(true)
+    expect(isRun('./gradlew :app:test')).toBe(true)
+    expect(isRun('./gradlew check')).toBe(true)
+  })
+
   test('lastTestRun reads a run whose output went to a log from the commands that read the log', () => {
     const run = (command: string, output: string) => ({ kind: 'tool', tool: 'Bash', input: { command }, output }) as const
     const mvn = 'mvn -q test -Dtest=CartIT > .local/t.log 2>&1; echo rc=$?'

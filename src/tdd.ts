@@ -24,13 +24,22 @@ export type TestRun = { command: string; output: string; red: boolean }
 
 // A command that runs tests: a runner's test subcommand, a test runner by name
 // (not a file named after one, like jest.config.js), or a Maven/Gradle build.
+// A Maven phase stands alone: `pmd:check` is a lint goal and `test-compile`
+// runs no test; a Gradle task may carry a project path (`:app:test`).
 const TEST_COMMAND = new RegExp(
   [
     String.raw`\b(?:npm|pnpm|yarn|bun|deno|go|cargo|dotnet|mix|swift|make|plugin)\s+(?:run\s+)?test\b`,
     String.raw`\b(?:vitest|jest|pytest|mocha|rspec|phpunit|unittest)(?![\w./-])`,
-    String.raw`\b(?:mvnw?|gradlew?)\b.*\b(?:test|verify|install|check|build)\b`,
+    String.raw`\bmvnw?\b.*(?<![\w:-])(?:test|verify|install|package)(?![\w:-])`,
+    String.raw`\bgradlew?\b.*\b(?:test|check|build)\b`,
   ].join('|'),
 )
+// A build told to skip its tests runs none.
+const SKIPS_TESTS = /-DskipTests\b|-Dmaven\.test\.skip=true\b|\s-x\s+(?::?\w+:)*test\b/
+
+function isTestCommand(command: string): boolean {
+  return TEST_COMMAND.test(command) && !SKIPS_TESTS.test(command)
+}
 // What a failing run prints, also when a pipe (`| tail`) hid its exit code.
 // An exit code the agent echoes after a run (`echo rc=$?`) counts too.
 const RED_OUTPUT =
@@ -52,7 +61,7 @@ export function lastTestRun(events: readonly HistoryEvent[]): TestRun | undefine
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]
     const command = commandOf(event)
-    if (event?.kind !== 'tool' || command === undefined || !TEST_COMMAND.test(command)) continue
+    if (event?.kind !== 'tool' || command === undefined || !isTestCommand(command)) continue
     const logs = [...command.matchAll(LOG_TARGET)].map(m => m[2] ?? '').filter(log => log !== '' && !log.startsWith('/dev/'))
     const reads = events.slice(i + 1).flatMap(later => {
       const read = commandOf(later)
