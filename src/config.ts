@@ -100,7 +100,7 @@ export function readConfig(options: PluginOptions): Config {
     fastPath: flag(options.fastPath, true),
     secondOpinion: flag(options.secondOpinion, true),
     parallelOpinions: flag(options.parallelOpinions, true),
-    stubFirst: flag(options.stubFirst, true),
+    stubFirst: flag(options.stubFirst, false),
     extensions: new Set(list(options.extensions).map(e => e.replace(/^\./, '').toLowerCase())),
     ignore: list(options.ignore).map(globToRegExp),
     testPatterns: tests.patterns,

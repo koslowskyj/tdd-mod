@@ -84,9 +84,9 @@ or process per write.
   Both are asked at once, so a block comes as soon as the slower answer does;
   the first pass lets the write through and cuts the other call short.
 - **Says what to do next.** A block gives the judge's reason, then one fixed
-  next step chosen from the last test run: write and run a failing test, write
-  only a stub after a compile or import error, or change only what the failing
-  assertion needs.
+  next step chosen from the last test run: write and run a failing test, or
+  change only what the failing test needs. A compile or import error counts
+  as red; with `stubFirst` on, the next step after one is to write only a stub.
 - **Gives an identical retry the same verdict.** A write to the same file, from
   the same content to the same content, gets the verdict it got before, without
   a model call, as long as there is no new evidence: no new test run and no new
@@ -172,7 +172,7 @@ keyed `tdd-mod@tdd-mod`; loaded with `--plugin-dir`, `tdd-mod` (or
 | `fastPath` | `true` | Pass a write that adds exactly one test without a model call. Faster, but a new test no longer checks for a refactor left unmade. |
 | `secondOpinion` | `true` | Block only when a second judge call agrees. |
 | `parallelOpinions` | `true` | Ask both judge calls at once: a block comes about 5 s sooner, at about twice the judge's input tokens. Off, the second is asked only after a violation. |
-| `stubFirst` | `true` | After a new test fails to compile or import (a missing symbol), ask for a placeholder stub and another run to see its assertion fail before the green step. Off, that failure is the red step: the judge lets the minimal implementation through at once, and a block's next step says so. |
+| `stubFirst` | `false` | After a new test fails to compile or import (a missing symbol), ask for a placeholder stub and another run to see its assertion fail before the green step, as probity does. Off, that failure is the red step: the judge lets the minimal implementation through at once, and a block's next step says so. |
 | `extensions` | `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, `cjs`, `py`, `go`, `rs`, `java`, `kt`, `kts`, `scala`, `rb`, `php`, `cs`, `fs`, `swift`, `c`, `cc`, `cpp`, `h`, `hpp`, `ex`, `exs`, `erl`, `clj`, `dart`, `lua`, `ipynb`, `vue`, `svelte` | Comma-separated extensions of the files judged. |
 | `ignore` | `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/vendor/**`, `**/.git/**`, `**/.claude/**`, `**/.local/**` | Comma-separated globs of paths never judged. |
 | `testPatterns` | *(empty: built-in patterns)* | How the fast path recognises a test declaration, per extension. A JSON object from comma-separated extensions to a regex; see below. |

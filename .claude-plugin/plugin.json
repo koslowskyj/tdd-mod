@@ -56,7 +56,7 @@
       "type": "boolean",
       "title": "Stub before green",
       "description": "After a new test fails to compile or import (a missing symbol), ask for a placeholder stub and another run to see its assertion fail before the green step. Off, that failure is the red step and the green step may follow at once.",
-      "default": true
+      "default": false
     },
     "extensions": {
       "type": "string",

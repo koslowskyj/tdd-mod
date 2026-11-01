@@ -793,12 +793,12 @@ describe('next steps', () => {
     expect(await blocked($, on, [asked])).toContain('Next: write a failing test for this change and run it')
   })
 
-  test('after a red without an assertion, a stub is enough', async ($, on) => {
+  test('with stubFirst on, after a red without an assertion, a stub is enough', { options: { stubFirst: true } }, async ($, on) => {
     const next = await blocked($, on, [asked, ran("Exit code 1\nERR_MODULE_NOT_FOUND './cart.ts'\nnot ok 1", true)])
     expect(next).toContain('Next: write only a placeholder stub')
   })
 
-  test('with stubFirst off, a compile or import red is the red step: no stub first', { options: { stubFirst: false } }, async ($, on) => {
+  test('by default a compile or import red is the red step: no stub first', async ($, on) => {
     const compileRed = [asked, ran("Exit code 1\nERR_MODULE_NOT_FOUND './cart.ts'\nnot ok 1", true)]
     const seen = engine(on, { messages: compileRed, reply: answer('{"kind":"violation","reason":"too much"}') })
     const r = await $.tool.call({ tool: 'Write', file_path: SRC, content: 'export const total = () => 3\n' })
@@ -807,7 +807,7 @@ describe('next steps', () => {
     expect(seen.prompts[0]).toContain('## Setting: no stub step')
   })
 
-  test('by default the judge is not told to skip the stub step', async ($, on) => {
+  test('with stubFirst on the judge is not told to skip the stub step', { options: { stubFirst: true } }, async ($, on) => {
     const seen = engine(on, { reply: answer('{"kind":"pass","reason":""}') })
     await $.tool.call({ tool: 'Write', file_path: SRC, content: 'export const total = () => 3\n' })
     expect(seen.prompts[0]).not.toContain('## Setting: no stub step')
@@ -981,8 +981,9 @@ describe('tdd logic', () => {
     const config = readConfig({})
     expect(config.judgeModel).toBe('haiku')
     expect(config.classifierModel).toBe('haiku')
-    expect(config.enabled && config.classifyTasks && config.fastPath && config.secondOpinion && config.stubFirst).toBe(true)
-    expect(readConfig({ stubFirst: false }).stubFirst).toBe(false)
+    expect(config.enabled && config.classifyTasks && config.fastPath && config.secondOpinion).toBe(true)
+    expect(config.stubFirst).toBe(false)
+    expect(readConfig({ stubFirst: true }).stubFirst).toBe(true)
   })
 
   test('history keeps answered tool calls and clips long output', () => {
