@@ -63,6 +63,13 @@ or process per write.
   folder an earlier `cd` in the command moved to, so `cd src/test/java/x &&
   sed -i … Helper.java` is a test write. A heredoc written to a file
   (`cat > f <<EOF`) is that file's content: paths named in it are not writes.
+  An inline script writes the files it opens for writing (`open(p, 'w')`,
+  `Path(p).write_text`, `writeFileSync`), followed through the names and
+  helper functions it passes them to, so a script that edits a doc and quotes
+  a source path in it is no source write; only when its target is out of
+  reach does every source path it names count. `$VAR` in a path is read from
+  an earlier `VAR=…` in the command; a path through a variable the command
+  does not set is left alone.
 - **Leaves files outside the project alone.** A write to an absolute path
   outside the project root, such as a scratch script in `/tmp`, is not judged.
 - **Passes every write to a test file** without asking the model (`Write`,
@@ -166,7 +173,7 @@ keyed `tdd-mod@tdd-mod`; loaded with `--plugin-dir`, `tdd-mod` (or
 | `secondOpinion` | `true` | Block only when a second judge call agrees. |
 | `parallelOpinions` | `true` | Ask both judge calls at once: a block comes about 5 s sooner, at about twice the judge's input tokens. Off, the second is asked only after a violation. |
 | `extensions` | `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, `cjs`, `py`, `go`, `rs`, `java`, `kt`, `kts`, `scala`, `rb`, `php`, `cs`, `fs`, `swift`, `c`, `cc`, `cpp`, `h`, `hpp`, `ex`, `exs`, `erl`, `clj`, `dart`, `lua`, `ipynb`, `vue`, `svelte` | Comma-separated extensions of the files judged. |
-| `ignore` | `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/vendor/**`, `**/.git/**`, `**/.claude/**` | Comma-separated globs of paths never judged. |
+| `ignore` | `**/node_modules/**`, `**/dist/**`, `**/build/**`, `**/vendor/**`, `**/.git/**`, `**/.claude/**`, `**/.local/**` | Comma-separated globs of paths never judged. |
 | `testPatterns` | *(empty: built-in patterns)* | How the fast path recognises a test declaration, per extension. A JSON object from comma-separated extensions to a regex; see below. |
 
 A change in `/config` reloads the mod with the new values.

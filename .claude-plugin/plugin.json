@@ -62,7 +62,7 @@
       "type": "string",
       "title": "Ignored paths",
       "description": "Comma-separated globs of paths never judged (** any folders, * any name part).",
-      "default": "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**"
+      "default": "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**,**/.local/**"
     },
     "testPatterns": {
       "type": "string",

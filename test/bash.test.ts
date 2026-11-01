@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { bashWriteTargets as targetsIn } from '../src/bash.ts'
 import { isInScope, readConfig } from '../src/config.ts'
 
-const config = readConfig({ extensions: "ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,rb,php,cs,fs,swift,c,cc,cpp,h,hpp,ex,exs,erl,clj,dart,lua,ipynb,vue,svelte", ignore: "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**" })
+const config = readConfig({ extensions: "ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,rb,php,cs,fs,swift,c,cc,cpp,h,hpp,ex,exs,erl,clj,dart,lua,ipynb,vue,svelte", ignore: "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**,**/.local/**" })
 const bashWriteTargets = (command: string) => targetsIn(command, path => isInScope(path, config))
 
 describe('bashWriteTargets', () => {
@@ -48,5 +48,38 @@ describe('bashWriteTargets', () => {
     expect(bashWriteTargets("cat > notes.md <<'EOF'\nconst f = (a) => a > b.ts\nEOF")).toEqual([])
     expect(bashWriteTargets('echo x > node_modules/pkg/index.js')).toEqual([])
     expect(bashWriteTargets('mv src/old.ts src/new.ts && git mv src/a.ts lib/a.ts')).toEqual([])
+  })
+
+  test('an inline script writes only the files it opens for writing, not every path it names', () => {
+    const wiki = "python3 - <<'EOF'\np='wiki/open-topics.md'\ns=open(p).read()\ns+='| D7 | coverage of `process-builder/index.vue` and Cart.java |'\nopen(p,'w').write(s)\nEOF"
+    expect(bashWriteTargets(wiki)).toEqual([])
+    const alias = "python3 - <<'EOF'\np='src/router.ts'\ns=open(p).read()\ns=s.replace(\"import('@/views/A.vue')\", \"import('@/views/B.vue')\")\nopen(p,'w').write(s)\nEOF"
+    expect(bashWriteTargets(alias)).toEqual(['src/router.ts'])
+    const joined = "python3 - <<'EOF'\nD='src/accounts/'\np=D+'Lookup.java'\nopen(p,'w').write('class Lookup {} // see Other.java')\nEOF"
+    expect(bashWriteTargets(joined)).toEqual(['src/accounts/Lookup.java'])
+    const helper = "python3 - <<'EOF'\ndef sub(path, old, new):\n    s=open(path).read()\n    open(path,'w').write(s.replace(old,new))\nsub('src/a.ts','Old.vue','x')\nsub('src/b.vue','x','y')\nEOF"
+    expect(bashWriteTargets(helper)).toEqual(['src/a.ts', 'src/b.vue'])
+    // A target the script computes in a way not followed: every source path it names counts.
+    const loop = "python3 - <<'EOF'\nfor p in ['src/a.ts', 'src/b.ts']:\n    open(p,'w').write('x')\nEOF"
+    expect(bashWriteTargets(loop)).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(bashWriteTargets("python3 - <<'EOF'\nimport json\nfor p in json.load(open('l.json')):\n    open(p,'w').write(\"import x from '@/a.vue'\")\nEOF")).toEqual([])
+    const path = "python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('src/a.ts'); s = p.read_text()\np.write_text(s.replace('Old.java', 'x'))\nEOF"
+    expect(bashWriteTargets(path)).toEqual(['src/a.ts'])
+    const globbed = "python3 - <<'EOF'\nimport pathlib\np = next(pathlib.Path('src').glob('*.ts'))\np.write_text('see src/b.ts')\nEOF"
+    expect(bashWriteTargets(globbed)).toEqual([])
+    expect(bashWriteTargets("python3 - <<'EOF'\nimport pathlib\np = next(pathlib.Path('src').glob('*'))\np.write_text(\"x = 'src/b.ts'\")\nEOF")).toEqual(['src/b.ts'])
+    // A write not recognised at all is no proof the script writes nothing.
+    expect(bashWriteTargets("python3 - <<'EOF'\nfrom pathlib import Path\n(Path('src') / 'a.ts').write_text('x')\nEOF")).toEqual(['a.ts'])
+  })
+
+  test('a path through a shell variable is read from its assignment, or left alone when unknown', () => {
+    expect(bashWriteTargets("M=src/auth; sed -i 's/a/b/' $M/Credentials.java")).toEqual(['src/auth/Credentials.java'])
+    expect(bashWriteTargets("export D=lib && cat > ${D}/a.ts <<'EOF'\nx\nEOF")).toEqual(['lib/a.ts'])
+    expect(bashWriteTargets("mkdir -p $CLAUDE_JOB_DIR/tmp && cat > $CLAUDE_JOB_DIR/tmp/probe.py <<'EOF'\nprint(1)\nEOF")).toEqual([])
+    expect(bashWriteTargets('S=/tmp/w; for t in old new; do cp x.ts $S/$t/a.ts; done')).toEqual([])
+  })
+
+  test('a scratch folder named .local is not judged by default', () => {
+    expect(bashWriteTargets("cat > .local/probe/probe1.mjs <<'EOF'\nconsole.log(1)\nEOF")).toEqual([])
   })
 })
