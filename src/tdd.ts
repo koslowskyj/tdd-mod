@@ -310,11 +310,18 @@ export function parseVerdict(text: string): Verdict {
   ) {
     return { kind: parsed.kind, reason: parsed.reason }
   }
+  const loose = LOOSE_VERDICT.exec(stripFence(text))
+  if (loose?.[1] === 'pass' || loose?.[1] === 'violation') return { kind: loose[1], reason: loose[2] ?? '' }
   return {
     kind: 'violation',
     reason: `could not parse verdict from validator output: ${text.slice(0, 500)}`,
   }
 }
+
+// A verdict that is no valid JSON: the judge quoted code in its reason without
+// escaping the quotes (`v-if="x"`), or its reply was cut off. The kind it
+// named still stands; the reason runs to the closing `"}` or the end.
+const LOOSE_VERDICT = /^\{\s*"kind"\s*:\s*"(pass|violation)"\s*,\s*"reason"\s*:\s*"([\s\S]*?)(?:"\s*\}[\s\S]*)?$/
 
 function safeParse(text: string): unknown {
   try {

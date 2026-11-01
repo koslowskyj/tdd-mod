@@ -889,6 +889,15 @@ describe('tdd logic', () => {
     expect(isGuardInstruction('add support for negative numbers')).toBe(false)
   })
 
+  test('parseVerdict reads a verdict whose reason has unescaped quotes or was cut off', () => {
+    const quoted = '{"kind":"pass","reason":"The green step: adding a single `v-if="isAsking"` guard is the minimum."}'
+    expect(parseVerdict(quoted)).toEqual({ kind: 'pass', reason: 'The green step: adding a single `v-if="isAsking"` guard is the minimum.' })
+    expect(parseVerdict('```json\n{"kind": "violation", "reason": "adds "retry" logic"}\n```')).toEqual({ kind: 'violation', reason: 'adds "retry" logic' })
+    expect(parseVerdict('{"kind":"pass","reason":"The green step for the failing asser')).toEqual({ kind: 'pass', reason: 'The green step for the failing asser' })
+    expect(parseVerdict('{"kind":"pass"').kind).toBe('violation')
+    expect(parseVerdict('I think it passes').kind).toBe('violation')
+  })
+
   test('parseVerdict reads fenced and embedded JSON', () => {
     expect(parseVerdict('```json\n{"kind":"pass","reason":""}\n```')).toEqual({ kind: 'pass', reason: '' })
     expect(parseVerdict('Thinking... {"kind":"violation","reason":"r"}')).toEqual({ kind: 'violation', reason: 'r' })
