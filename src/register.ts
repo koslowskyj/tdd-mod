@@ -370,7 +370,7 @@ async function judgeWrite(
     $.ui.log(`tdd-mod: verdict reversed on retry (${previous} → ${decision.verdict.kind}) ${pending.path}`, { to: 'debug' })
   }
   // A block the judge answered says what to do next; a missing answer already says retry.
-  const verdict = decision.verdict.kind === 'violation' && !decision.verdict.unanswered ? { ...decision.verdict, next: nextStep(lastTestRun(history)) } : decision.verdict
+  const verdict = decision.verdict.kind === 'violation' && !decision.verdict.unanswered ? { ...decision.verdict, next: nextStep(lastTestRun(history), config.stubFirst) } : decision.verdict
   if (!verdict.unanswered) verdicts.byEvidence.set(key, verdict)
   verdicts.byWrite.set(write, verdict.kind)
   return verdict

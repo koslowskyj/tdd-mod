@@ -58,7 +58,7 @@ export async function decide(
     const verdict: Verdict = { kind: 'pass', reason: '' }
     return { verdict, opinions: [verdict], fastPath: true, usage: { input: 0, output: 0 } }
   }
-  const prompt = buildPrompt(await history(), before, pending, also)
+  const prompt = buildPrompt(await history(), before, pending, also, { stubFirst: config.stubFirst })
   const usage: Usage = { input: 0, output: 0 }
   const judge: Complete = async (request, options) => {
     const reply = await complete(request, options)

@@ -52,6 +52,12 @@
       "description": "With a second opinion, ask both model calls at the same time instead of one after a violation: a block comes about 5 s sooner, and the first pass cuts the other call short. Costs about twice the judge's input tokens.",
       "default": true
     },
+    "stubFirst": {
+      "type": "boolean",
+      "title": "Stub before green",
+      "description": "After a new test fails to compile or import (a missing symbol), ask for a placeholder stub and another run to see its assertion fail before the green step. Off, that failure is the red step and the green step may follow at once.",
+      "default": true
+    },
     "extensions": {
       "type": "string",
       "title": "Source file extensions",

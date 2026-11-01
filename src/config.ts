@@ -10,6 +10,8 @@ export type Config = {
   fastPath: boolean
   secondOpinion: boolean
   parallelOpinions: boolean
+  /** After a compile or import red, ask for a placeholder stub and another run before the green step. */
+  stubFirst: boolean
   extensions: ReadonlySet<string>
   ignore: readonly RegExp[]
   testPatterns: TestPatterns
@@ -98,6 +100,7 @@ export function readConfig(options: PluginOptions): Config {
     fastPath: flag(options.fastPath, true),
     secondOpinion: flag(options.secondOpinion, true),
     parallelOpinions: flag(options.parallelOpinions, true),
+    stubFirst: flag(options.stubFirst, true),
     extensions: new Set(list(options.extensions).map(e => e.replace(/^\./, '').toLowerCase())),
     ignore: list(options.ignore).map(globToRegExp),
     testPatterns: tests.patterns,

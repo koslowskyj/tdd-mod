@@ -1,7 +1,7 @@
 // Pure logic for the TDD guard: no `$`, so the tests can drive it directly.
 // Shapes follow probity's enforceTdd, trimHistory, applyEdit and toVerdict.
 import type { SessionMessage } from 'claude-code'
-import { DEFAULT_TDD_RULES, PROCESS_INSTRUCTIONS, RESPONSE_SPEC } from './prompt.ts'
+import { DEFAULT_TDD_RULES, NO_STUB_STEP, PROCESS_INSTRUCTIONS, RESPONSE_SPEC } from './prompt.ts'
 
 export const MAX_EVENTS = 10
 export const MAX_CONTENT_CHARS = 6000
@@ -93,14 +93,16 @@ const ASSERTION_FAILED =
  * What a blocked agent does next, from the last test run: one fixed line, so
  * a block does not end in a retry of the same write.
  */
-export function nextStep(run: TestRun | undefined): string {
+export function nextStep(run: TestRun | undefined, stubFirst = true): string {
   const step = !run
     ? 'Next: write a failing test for this change and run it, then make the smallest change that passes it.'
     : !run.red
       ? 'Next: write and run a failing test for the new behaviour first; a refactor under green must not change behaviour.'
       : ASSERTION_FAILED.test(run.output)
         ? 'Next: change only what the failing assertion needs, or run the test this change is for.'
-        : 'Next: write only a placeholder stub that lets the test compile or import, and rerun the tests to see its assertion fail.'
+        : stubFirst
+          ? 'Next: write only a placeholder stub that lets the test compile or import, and rerun the tests to see its assertion fail.'
+          : 'Next: change only what the failing test needs, or run the test this change is for.'
   return `${step} The same write is blocked again until a new test run.`
 }
 
@@ -270,8 +272,10 @@ export function buildPrompt(
   before: FileContent,
   action: { path: string; content: string },
   also: readonly Change[] = [],
+  options: { stubFirst?: boolean } = {},
 ): string {
   const sections = [PROCESS_INSTRUCTIONS, DEFAULT_TDD_RULES]
+  if (options.stubFirst === false) sections.push(NO_STUB_STEP)
   const recent = trimHistory(history)
   if (recent.length > 0) {
     sections.push(`## Recent session\n\n${recent.map(formatEvent).join('\n')}`)

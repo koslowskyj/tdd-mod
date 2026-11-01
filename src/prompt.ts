@@ -159,6 +159,16 @@ Name the violation and say why it breaks TDD. Do not dictate edit
 order, require the file to be complete or runnable, or demand other
 steps be bundled into this write.`
 
+// Not from probity: the `stubFirst` setting turned off.
+export const NO_STUB_STEP = `## Setting: no stub step
+
+This project counts a new test's compile, import or missing-symbol failure
+as its red step. This replaces "Reaching a clean red" and the rule that the
+failure must be an assertion: after such a failure, the green step may
+implement what the failing test asserts, at the minimum it needs, without a
+placeholder stub and another run first. Anything beyond what that test
+asserts is still over-implementation.`
+
 export const RESPONSE_SPEC = `## Response format
 
 Respond with a single JSON object of exactly this shape:
