@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { bashWriteTargets as targetsIn } from '../src/bash.ts'
 import { isInScope, readConfig } from '../src/config.ts'
+import { languages } from './languages.ts'
 
 const config = readConfig({ extensions: "ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,rb,php,cs,fs,swift,c,cc,cpp,h,hpp,ex,exs,erl,clj,dart,lua,ipynb,vue,svelte", ignore: "**/node_modules/**,**/dist/**,**/build/**,**/vendor/**,**/.git/**,**/.claude/**,**/.local/**" })
 const bashWriteTargets = (command: string) => targetsIn(command, path => isInScope(path, config))
@@ -66,11 +67,29 @@ describe('bashWriteTargets', () => {
     const path = "python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('src/a.ts'); s = p.read_text()\np.write_text(s.replace('Old.java', 'x'))\nEOF"
     expect(bashWriteTargets(path)).toEqual(['src/a.ts'])
     const globbed = "python3 - <<'EOF'\nimport pathlib\np = next(pathlib.Path('src').glob('*.ts'))\np.write_text('see src/b.ts')\nEOF"
-    expect(bashWriteTargets(globbed)).toEqual([])
+    expect(bashWriteTargets(globbed)).toEqual(['src/*.ts'])
+    // A glob that names no file type is out of reach: every source path the script names counts.
     expect(bashWriteTargets("python3 - <<'EOF'\nimport pathlib\np = next(pathlib.Path('src').glob('*'))\np.write_text(\"x = 'src/b.ts'\")\nEOF")).toEqual(['src/b.ts'])
     // A write not recognised at all is no proof the script writes nothing.
     expect(bashWriteTargets("python3 - <<'EOF'\nfrom pathlib import Path\n(Path('src') / 'a.ts').write_text('x')\nEOF")).toEqual(['a.ts'])
   })
+
+  test('a script that edits a plan it found by a glob is no source write, whatever file names the plan quotes', () => {
+    // As a subagent ran it in process-automation on 2026-11-01, shortened.
+    const plan =
+      "cd wiki/plans/sub-accounts; python3 - <<'EOF'\nimport re,glob\ndef sub(path, start, end, new):\n    s=open(path).read()\n" +
+      "    i=s.index(start); j=s.index(end)\n    s=s[:i]+new+s[j:]\n    open(path,'w').write(s)\n\np=glob.glob('6-*.md')[0]\n" +
+      "sub(p,\"Backend:\\n\",\"## How\",'''fills `CreateOrUpdateDialog.vue`, `AccountDetail.vue` and 'AccountsList.vue' ''')\nEOF"
+    expect(bashWriteTargets(plan)).toEqual([])
+  })
+
+  for (const [language, script] of Object.entries(languages)) {
+    test(`${language}: a script writes the files it writes, found by a glob or named`, () => {
+      expect(bashWriteTargets(script.docByGlob)).toEqual([])
+      expect(bashWriteTargets(script.sourceByGlob)).toEqual(['src/*.ts'])
+      expect(bashWriteTargets(script.named)).toEqual(['src/a.ts'])
+    })
+  }
 
   test('a path through a shell variable is read from its assignment, or left alone when unknown', () => {
     expect(bashWriteTargets("M=src/auth; sed -i 's/a/b/' $M/Credentials.java")).toEqual(['src/auth/Credentials.java'])

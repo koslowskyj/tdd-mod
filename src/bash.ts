@@ -9,7 +9,9 @@ const HEREDOC = /<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g
 // `>`, `>>`, `>|`, `2>`, `&>` followed by a target; not `>&2` and not `->`/`=>`.
 const REDIRECT = /(?:^|[^-=<>])(?:\d|&)?>[>|]?(?!&)\s*(['"]?)([^\s;|&<>'"()]+)\1/g
 // Inline interpreters: Python open(..., 'w'|'a'), write_text/write_bytes, Node writeFile(Sync).
-const SCRIPT_WRITE = /open\([^)]*['"][wax]\+?b?['"]|\.write_(?:text|bytes)\(|writeFile(?:Sync)?\(|appendFile(?:Sync)?\(/
+// Ruby File.write, Perl open($fh, '>', …), PHP file_put_contents and fopen, Deno and Bun writes too.
+const SCRIPT_WRITE =
+  /open\((?:[^()]|\([^()]*\))*['"][wax]\+?b?['"]|\.write_(?:text|bytes)\(|(?:writeFile|appendFile)(?:Sync)?\(|\b(?:File|IO|Bun)\.write\(|\bDeno\.write(?:Text)?File(?:Sync)?\(|\bfile_put_contents\(|\bopen\(\s*(?:my\s+)?\$?\w+\s*,\s*['"]\+?>/
 // A path an inline script names; not an import alias such as `@/views/A.vue`.
 const PATH_LITERAL = /['"`]([^'"`\s@*][^'"`\s*]*\.\w+)['"`]/g
 // A command that runs a script, as `python3 -`, `/usr/bin/node -e`, `uv run python`: not `cat > f <<EOF`.
@@ -164,28 +166,46 @@ export function bashWriteTargets(command: string, inScope: (path: string) => boo
   return [...new Set(targets.filter(inScope))]
 }
 
-// Where a script writes: the path argument of open(p, 'w'), Path(p).write_text(), p.write_text(), writeFileSync(p, …).
+// A call argument: anything up to the next comma, with one level of brackets (`glob('*.md')[0]`).
+const ARG = String.raw`((?:[^,()]|\([^()]*\))+?)`
+// Where a script writes, by the path argument: Python open(p, 'w'), Path(p).write_text(), p.write_text();
+// Node writeFileSync(p, …); Deno.writeTextFile(p, …); Bun.write(p, …); Ruby File.write(p, …),
+// File.open(p, 'w'); Perl open($fh, '>', p); PHP file_put_contents(p, …), fopen(p, 'w').
 const WRITE_SITES = [
-  /\bopen\(\s*([^,()]+?)\s*,\s*['"][wax]/g,
-  /\bPath\(\s*([^()]+?)\s*\)\.write_(?:text|bytes)\(/g,
-  /(?<![\w)\].])(\w+)\.write_(?:text|bytes)\(/g,
-  /\b(?:writeFile|appendFile)(?:Sync)?\(\s*([^,()]+?)\s*,/g,
+  new RegExp(String.raw`\bf?open\(\s*${ARG}\s*,\s*['"]\+?[wax]`, 'g'),
+  new RegExp(String.raw`\bopen\(\s*(?:my\s+)?\$?\w+\s*,\s*['"]\+?>>?['"]\s*,\s*${ARG}\s*\)`, 'g'),
+  new RegExp(String.raw`\bPath\(\s*${ARG}\s*\)\.write_(?:text|bytes)\(`, 'g'),
+  /(?<![\w)\].$])(\w+)\.write_(?:text|bytes)\(/g,
+  new RegExp(String.raw`(?:\b(?:writeFile|appendFile)(?:Sync)?|\b(?:File|IO|Bun)\.write|\bDeno\.write(?:Text)?File(?:Sync)?|\bfile_put_contents)\(\s*${ARG}\s*,`, 'g'),
 ]
-// `name = 'a' + other`, one per statement, `const`/`let` allowed.
-const SCRIPT_ASSIGNMENT = /^[ \t]*(?:(?:const|let|var)[ \t]+)?(\w+)[ \t]*=[ \t]*([^=\n][^\n]*?)[ \t]*$/gm
+// `name = 'a' + other`, one per statement: `const`/`let`/`my` and Perl/PHP `$name` allowed.
+const SCRIPT_ASSIGNMENT = /^[ \t]*(?:(?:const|let|var|my|our|local)[ \t]+)?\$?(\w+)[ \t]*=[ \t]*([^=\n][^\n]*?)[ \t]*$/gm
 const STRING = /^(['"])([^'"\n]*)\1$/
 // `Path('a')` or `pathlib.Path(other)`: the path it wraps.
 const PATH_OBJECT = /^(?:pathlib\.)?Path\(\s*(.+?)\s*\)$/
-// `def sub(path, old):` or `function sub(path, old) {`: a helper that writes its first parameter.
-const HELPER = /\b(?:def|function)[ \t]+(\w+)[ \t]*\([ \t]*(\w+)/g
+// A glob's pattern: Path('d').glob('p'), glob.glob('p')[0], fs.globSync, glob.sync, Deno's
+// expandGlobSync, new Bun.Glob('p'), Ruby Dir.glob('p') and Dir['p'], Perl and PHP glob('p').
+const GLOB = /\bPath\(\s*(['"])([^'"\n]*)\1\s*\)\.r?glob\(\s*(['"])([^'"\n]*)\3|\b(?:\w+\.)*(?:[gG]lob|globSync|iglob|sync|expandGlob(?:Sync)?)\(\s*(['"])([^'"\n]*)\5|\bDir\[\s*(['"])([^'"\n]*)\7\s*\]/
+// A file type the glob names for sure: `*.md`, not `*` or `*.*`.
+const TYPED = /\.\w+$/
+// `def sub(path, old):`, `function sub(path, old) {`, PHP `function sub($path…`: a helper that writes its first parameter.
+const HELPER = /\b(?:def|function)[ \t]+(\w+)[ \t]*\([ \t]*\$?(\w+)/g
 
-/** The values `expression`, string literals and names joined by `+`, can take; undefined when a part is unknown. */
+/**
+ * The values `expression` can take: a glob's pattern when it names a file
+ * type, or string literals and names joined by `+`; undefined when a part is unknown.
+ */
 function evaluate(expression: string, names: ReadonlyMap<string, string[]>): string[] | undefined {
+  const glob = GLOB.exec(expression)
+  if (glob) {
+    const pattern = glob[2] !== undefined ? `${glob[2]}/${glob[4]}` : (glob[6] ?? glob[8] ?? '')
+    return TYPED.test(pattern) ? [pattern] : undefined
+  }
   let values = ['']
   const unwrapped = PATH_OBJECT.exec(expression.trim())?.[1] ?? expression
   for (const part of unwrapped.split(/\s*\+\s*/)) {
     const literal = STRING.exec(part.trim())?.[2]
-    const options = literal !== undefined ? [literal] : names.get(part.trim())
+    const options = literal !== undefined ? [literal] : names.get(part.trim().replace(/^\$/, ''))
     if (options === undefined || options.length === 0) return undefined
     values = values.flatMap(v => options.map(o => v + o))
   }
@@ -216,9 +236,9 @@ function scriptTargets(script: string): string[] | undefined {
 
   // A helper's parameter: what each call passes it.
   function viaHelper(param: string): string[] | undefined {
-    const fn = helpers.get(param)
+    const fn = helpers.get(param.replace(/^\$/, ''))
     if (fn === undefined) return undefined
-    const calls = [...script.matchAll(new RegExp(String.raw`(?<!(?:def|function)[ \t]+)\b${fn}\(\s*([^,()]+?)\s*[,)]`, 'g'))]
+    const calls = [...script.matchAll(new RegExp(String.raw`(?<!(?:def|function)[ \t]+)\b${fn}\(\s*${ARG}\s*[,)]`, 'g'))]
     const values = calls.map(([, argument = '']) => evaluate(argument, names))
     return values.length > 0 && values.every(v => v !== undefined) ? values.flat() as string[] : undefined
   }
