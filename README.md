@@ -70,8 +70,15 @@ or process per write.
   reach does every source path it names count. `$VAR` in a path is read from
   an earlier `VAR=…` in the command; a path through a variable the command
   does not set is left alone.
-- **Leaves files outside the project alone.** A write to an absolute path
-  outside the project root, such as a scratch script in `/tmp`, is not judged.
+- **Judges every repository, leaves scratch files alone.** A write outside the
+  folder the session started in is judged when the file lives in a git
+  repository of its own: the nearest folder above it holding `.git` (a folder,
+  or a file in a worktree or submodule) is its project root, and test files are
+  recognised below that root. So a session started in one repository that
+  fixes code in a sibling one is judged there too, for Write, Edit,
+  NotebookEdit and shell writes alike. A file in no repository, such as a
+  scratch script in `/tmp`, is not judged; the skip is logged to the debug log.
+  Each folder's root is looked up once per session.
 - **Passes every write to a test file** without asking the model (`Write`,
   `Edit` and `NotebookEdit`): writing a test is the red step itself. A test file is one in a `test/`, `tests/` or
   `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`,

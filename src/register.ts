@@ -3,6 +3,7 @@ import { bashWriteTargets } from './bash.ts'
 import { applyCalls, batchFor, filesOf, type WriteCall } from './batch.ts'
 import { isInProject, isInScope, isTestFile, readConfig, type Config } from './config.ts'
 import { runEval } from './eval.ts'
+import { projectRootOf, type RootCache } from './scope.ts'
 import { classifyTask, decide, type Complete, type Pending, type Usage } from './guard.ts'
 import { isGuardInstruction, type TaskKind } from './task.ts'
 import { evidenceOf, lastTestRun, nextStep, toHistory, type Change, type FileContent, type HistoryEvent, type Verdict } from './tdd.ts'
@@ -56,6 +57,8 @@ export const register: Register = (on, options) => {
   const inScope = (path: string, root: string) => isInScope(path, config) && isInProject(path, root)
   // The writes the judge sees: source files of the project that are not tests.
   const judgedIn = (root: string) => (path: string) => inScope(path, root) && !isTestFile(path, root)
+  // The repository root of each folder written to outside the session root.
+  const roots: RootCache = new Map()
 
   // The main session's task kind, from the latest typed prompt. Starts as
   // coding, also after a reload, so the guard is on until a prompt says otherwise.
@@ -144,8 +147,8 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    const root = await projectRoot($)
-    if (!inScope(e.file_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
+    const root = await rootOf($, config, roots,e.file_path)
+    if (root === undefined || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.file_path, root)) {
       await shown($, await now($), 'pass', e.file_path, 'test file')
       return next(e)
@@ -156,8 +159,8 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    const root = await projectRoot($)
-    if (!inScope(e.file_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
+    const root = await rootOf($, config, roots,e.file_path)
+    if (root === undefined || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.file_path, root)) {
       await shown($, await now($), 'pass', e.file_path, 'test file')
       return next(e)
@@ -169,7 +172,7 @@ export const register: Register = (on, options) => {
 
   // Shell writes bypass the TDD check: send them through Write/Edit instead.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const targets = bashWriteTargets(e.command, judgedIn(await projectRoot($)))
+    const targets = await judgedTargets($, config, roots, e.command)
     if (targets.length === 0 || !(await judging($, config, labels, e.agentId))) return next(e)
     $.ui.log(`tdd-mod: violation (bash write) ${targets.join(', ')}`, { to: 'debug' })
     return {
@@ -180,8 +183,8 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => {
-    const root = await projectRoot($)
-    if (!inScope(e.notebook_path, root) || !(await judging($, config, labels, e.agentId))) return next(e)
+    const root = await rootOf($, config, roots,e.notebook_path)
+    if (root === undefined || !(await judging($, config, labels, e.agentId))) return next(e)
     if (isTestFile(e.notebook_path, root)) {
       await shown($, await now($), 'pass', e.notebook_path, 'test file')
       return next(e)
@@ -268,6 +271,25 @@ async function readBefore($: EngineInterface, path: string): Promise<FileContent
 }
 
 /** The project root, so a test folder is told apart from the folder the checkout lives in; '' when unknown. */
+/** The source files `command` writes that are judged: in a project of their own, and no tests. */
+async function judgedTargets($: EngineInterface, config: Config, roots: RootCache, command: string): Promise<string[]> {
+  const judged: string[] = []
+  for (const path of bashWriteTargets(command, p => isInScope(p, config))) {
+    const root = await rootOf($, config, roots,path)
+    if (root !== undefined && !isTestFile(path, root)) judged.push(path)
+  }
+  return judged
+}
+
+/** The root of the project the source file `path` belongs to; undefined when it is not judged. */
+async function rootOf($: EngineInterface, config: Config, roots: RootCache, path: string): Promise<string | undefined> {
+  if (!isInScope(path, config)) return undefined
+  const root = await projectRoot($)
+  const own = await projectRootOf(p => $.fs.exists(p), path, root, roots)
+  if (own === undefined) $.ui.log(`tdd-mod: skipped ${path}: outside every project`, { to: 'debug' })
+  return own
+}
+
 async function projectRoot($: EngineInterface): Promise<string> {
   try {
     return await $.session.root()

@@ -180,6 +180,78 @@ describe('tool.call', () => {
     expect(reason(inside)).toBe('tdd-mod: no failing test')
   })
 
+  test('a source write outside every project is logged as skipped', async ($, on) => {
+    on('session.root', () => ({ value: '/repo' }))
+    const seen = engine(on, { reply: answer('{"kind":"violation","reason":"never asked"}') })
+    await $.tool.call({ tool: 'Write', file_path: '/tmp/x/a.py', content: 'print(1)\n' })
+    await $.tool.call({ tool: 'Bash', command: "sed -i 's/1/2/' /tmp/x/b.py" })
+    expect(seen.logs.filter(l => l.includes('outside every project'))).toEqual([
+      'tdd-mod: skipped /tmp/x/a.py: outside every project',
+      'tdd-mod: skipped /tmp/x/b.py: outside every project',
+    ])
+  })
+
+  // A session started in one repository fixes code in a sibling one.
+  const OTHER = '/work/other'
+  const inSibling = { '/work/other/.git': '', '/work/other/core/src/main/java/Foo.java': 'class Foo {}\n' }
+
+  test('an Edit to a source file in a sibling git repository is judged', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    const seen = engine(on, { files: { ...inSibling }, reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    const r = await $.tool.call({ tool: 'Edit', file_path: `${OTHER}/core/src/main/java/Foo.java`, old_string: 'class Foo {}', new_string: 'class Foo { int n; }' })
+    expect(reason(r)).toBe('tdd-mod: no failing test')
+    expect(seen.written).toEqual([])
+  })
+
+  test('a Write or NotebookEdit in a sibling git repository is judged', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    engine(on, { files: { ...inSibling }, reply: answer('{"kind":"violation","reason":"no failing test"}') })
+    on('tool.call', { tool: 'NotebookEdit' }, () => ({ result: {} as never }))
+    const write = await $.tool.call({ tool: 'Write', file_path: `${OTHER}/core/src/main/java/Bar.java`, content: 'class Bar {}\n' })
+    const notebook = await $.tool.call({ tool: 'NotebookEdit', notebook_path: `${OTHER}/notes/a.ipynb`, new_source: 'print(1)' })
+    expect([reason(write), reason(notebook)]).toEqual(['tdd-mod: no failing test', 'tdd-mod: no failing test'])
+  })
+
+  test('an Edit to a test file in a sibling git repository passes as a test file', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    const TEST_FILE = `${OTHER}/core/src/test/java/FooTest.java`
+    const seen = engine(on, { files: { ...inSibling, [TEST_FILE]: 'class FooTest {}\n' }, reply: answer('{"kind":"violation","reason":"never asked"}') })
+    const r = await $.tool.call({ tool: 'Edit', file_path: TEST_FILE, old_string: 'class FooTest {}', new_string: 'class FooTest { void a() {} }' })
+    expect([r.deny, seen.prompts.length, seen.written]).toEqual([undefined, 0, [TEST_FILE]])
+  })
+
+  test('the project of a folder is looked up once, not on every write', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    const lookups: string[] = []
+    const files = new Proxy<Record<string, string>>({ ...inSibling }, {
+      has: (target, key) => {
+        if (typeof key === 'string' && key.endsWith('/.git')) lookups.push(key)
+        return key in target
+      },
+    })
+    engine(on, { files, reply: answer('{"kind":"pass","reason":""}') })
+    await $.tool.call({ tool: 'Write', file_path: `${OTHER}/core/src/main/java/A.java`, content: 'class A {}\n' })
+    const first = lookups.length
+    await $.tool.call({ tool: 'Write', file_path: `${OTHER}/core/src/main/java/B.java`, content: 'class B {}\n' })
+    await $.tool.call({ tool: 'Bash', command: `sed -i 's/A/C/' ${OTHER}/core/src/main/java/A.java` })
+    expect([first > 0, lookups.length - first]).toEqual([true, 0])
+  })
+
+  test('a Bash write to a source file in a sibling git repository is sent to Write/Edit', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    engine(on, { files: { ...inSibling }, reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const absolute = await $.tool.call({ tool: 'Bash', command: `sed -i 's/Foo/Baz/' ${OTHER}/core/src/main/java/Foo.java` })
+    const cdThere = await $.tool.call({ tool: 'Bash', command: `cd ${OTHER}/core && sed -i 's/Foo/Baz/' src/main/java/Foo.java` })
+    const relative = await $.tool.call({ tool: 'Bash', command: "sed -i 's/Foo/Baz/' ../other/core/src/main/java/Foo.java" })
+    const test = await $.tool.call({ tool: 'Bash', command: `sed -i 's/a/b/' ${OTHER}/core/src/test/java/FooTest.java` })
+    expect([absolute.deny, cdThere.deny, relative.deny, test.deny].map(d => d?.match(/writes to (\S+)\./)?.[1])).toEqual([
+      `${OTHER}/core/src/main/java/Foo.java`,
+      `${OTHER}/core/src/main/java/Foo.java`,
+      '../other/core/src/main/java/Foo.java',
+      undefined,
+    ])
+  })
+
   test('a Bash command that cds into the sources and writes one is still sent to Write/Edit', async ($, on) => {
     engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
     const bySed = await $.tool.call({ tool: 'Bash', command: "cd src && sed -i 's/3/4/' cart.ts" })
