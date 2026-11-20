@@ -52,7 +52,7 @@ describe('bashWriteTargets', () => {
   })
 
   test('an inline script writes only the files it opens for writing, not every path it names', () => {
-    const wiki = "python3 - <<'EOF'\np='wiki/open-topics.md'\ns=open(p).read()\ns+='| D7 | coverage of `process-builder/index.vue` and Cart.java |'\nopen(p,'w').write(s)\nEOF"
+    const wiki = "python3 - <<'EOF'\np='wiki/open-topics.md'\ns=open(p).read()\ns+='| D7 | coverage of `checkout/index.vue` and Cart.java |'\nopen(p,'w').write(s)\nEOF"
     expect(bashWriteTargets(wiki)).toEqual([])
     const alias = "python3 - <<'EOF'\np='src/router.ts'\ns=open(p).read()\ns=s.replace(\"import('@/views/A.vue')\", \"import('@/views/B.vue')\")\nopen(p,'w').write(s)\nEOF"
     expect(bashWriteTargets(alias)).toEqual(['src/router.ts'])
@@ -75,9 +75,9 @@ describe('bashWriteTargets', () => {
   })
 
   test('a script that edits a plan it found by a glob is no source write, whatever file names the plan quotes', () => {
-    // As a subagent ran it in process-automation on 2026-11-01, shortened.
+    // As a subagent ran it, shortened.
     const plan =
-      "cd wiki/plans/sub-accounts; python3 - <<'EOF'\nimport re,glob\ndef sub(path, start, end, new):\n    s=open(path).read()\n" +
+      "cd docs/plans/checkout; python3 - <<'EOF'\nimport re,glob\ndef sub(path, start, end, new):\n    s=open(path).read()\n" +
       "    i=s.index(start); j=s.index(end)\n    s=s[:i]+new+s[j:]\n    open(path,'w').write(s)\n\np=glob.glob('6-*.md')[0]\n" +
       "sub(p,\"Backend:\\n\",\"## How\",'''fills `CreateOrUpdateDialog.vue`, `AccountDetail.vue` and 'AccountsList.vue' ''')\nEOF"
     expect(bashWriteTargets(plan)).toEqual([])
@@ -96,6 +96,107 @@ describe('bashWriteTargets', () => {
     expect(bashWriteTargets("export D=lib && cat > ${D}/a.ts <<'EOF'\nx\nEOF")).toEqual(['lib/a.ts'])
     expect(bashWriteTargets("mkdir -p $CLAUDE_JOB_DIR/tmp && cat > $CLAUDE_JOB_DIR/tmp/probe.py <<'EOF'\nprint(1)\nEOF")).toEqual([])
     expect(bashWriteTargets('S=/tmp/w; for t in old new; do cp x.ts $S/$t/a.ts; done')).toEqual([])
+  })
+
+  test('a > inside quotes is text, not a redirect', () => {
+    expect(bashWriteTargets("sed -n 1,2p A.java; git log -L '/private Result<Integer> hide/,+12:svc/A.java'")).toEqual([])
+    expect(bashWriteTargets('grep "a > b.ts" src/a.ts')).toEqual([])
+    expect(bashWriteTargets('echo "a > b" > src/c.ts')).toEqual(['src/c.ts'])
+    expect(bashWriteTargets('echo x > "src/a b.ts"')).toEqual(['src/a b.ts'])
+  })
+
+  test('where quoting is not clear-cut, a > inside a string does not swallow the redirect after it', () => {
+    expect(bashWriteTargets('echo "<b>" > src/a.vue; echo "$(date)"')).toEqual(['src/a.vue'])
+    expect(bashWriteTargets(`printf '%s' '<div>' > src/a.vue; echo '$(pwd)'`)).toEqual(['src/a.vue'])
+  })
+
+  test('where quoting is not clear-cut, a quoted redirect target is still read', () => {
+    expect(bashWriteTargets(`printf 'x' > "src/a.ts" # done`)).toEqual(['src/a.ts'])
+    expect(bashWriteTargets(`echo "$(date)" > 'src/a.ts'`)).toEqual(['src/a.ts'])
+    expect(bashWriteTargets('echo x > "$(pwd)/src/a.ts"')).toEqual(['src/a.ts'])
+  })
+
+  test('where quoting is not clear-cut, a redirect is still read', () => {
+    expect(bashWriteTargets("# don't break\necho x > src/a.ts\necho 'done'")).toEqual(['src/a.ts'])
+    expect(bashWriteTargets(`v="$(grep -c "it's" README.md)"; echo 1 > src/a.ts; echo 'ok'`)).toEqual(['src/a.ts'])
+    expect(bashWriteTargets('echo \\" > src/a.ts; echo "x"')).toEqual(['src/a.ts'])
+  })
+
+  test('a cd into a known variable or ~ is followed', () => {
+    expect(bashWriteTargets("B=/tmp/x; cd $B/ts; sed -i 's/a/b/' rules/r.js")).toEqual(['/tmp/x/ts/rules/r.js'])
+    const home = new Map([['HOME', '/home/u']])
+    expect(targetsIn("cd ~/w/site && cat > src/a.ts <<'EOF'\nx\nEOF", p => isInScope(p, config), home)).toEqual(['/home/u/w/site/src/a.ts'])
+  })
+
+  test('a cd into a folder the environment names is followed; one not known keeps the write judged', () => {
+    const job = new Map([['CLAUDE_JOB_DIR', '/jobs/j']])
+    const inScope = (p: string) => isInScope(p, config)
+    expect(targetsIn("mkdir -p $CLAUDE_JOB_DIR/tmp/demo && cd $CLAUDE_JOB_DIR/tmp/demo && cat > unpack.py <<'EOF'\nprint(1)\nEOF", inScope, job)).toEqual(['/jobs/j/tmp/demo/unpack.py'])
+    expect(targetsIn("cd $CLAUDE_JOB_DIR/tmp && python3 - <<'EOF'\nopen('v.mts','w').write('x')\nEOF", inScope, job)).toEqual(['/jobs/j/tmp/v.mts'])
+    // A folder not known could be the project itself: the write is still judged, from where the session is.
+    expect(bashWriteTargets('cd "$PWD" && sed -i s/a/b/ src/a.ts')).toEqual(['src/a.ts'])
+    expect(bashWriteTargets('cd "$(git rev-parse --show-toplevel)" && echo x > src/a.ts')).toEqual(['src/a.ts'])
+    expect(bashWriteTargets('cd ~u && echo x > a.ts')).toEqual(['a.ts'])
+    expect(bashWriteTargets('cd -P src && echo x > a.ts')).toEqual(['src/a.ts'])
+  })
+
+  test('a computed target with a known part is placed by that part, not by every path the script names', () => {
+    const tmp = "python3 - <<'EOF'\nbase='core/x/'\nfor f in ['page_number/A.java','offset_limit/B.java']:\n    cls=f.split('/')[-1]\n    s=open(base+f).read()\n    open('/tmp/'+cls+'.new','w').write(s)\nEOF"
+    expect(bashWriteTargets(tmp)).toEqual([])
+    expect(bashWriteTargets(`node -e "const out=transform(src,{filename:'x#/bundle.jsx'}).code; require('fs').writeFileSync(process.env.J+'/compiled.js',out)"`)).toEqual([])
+    expect(bashWriteTargets("python3 - <<'EOF'\nfor n in ['a','b']:\n    open('src/'+n+'.ts','w').write('see lib/c.ts')\nEOF")).toEqual(['src/*.ts'])
+  })
+
+  test('a computed target with several unknown parts in a row has one * for them', () => {
+    expect(bashWriteTargets("python3 - <<'EOF'\nopen('src/'+a+b+c+'.ts','w').write('x')\nEOF")).toEqual(['src/*.ts'])
+  })
+
+  test('a computed target whose known parts do not settle the file type counts every source path the script names', () => {
+    expect(bashWriteTargets("python3 - <<'EOF'\nfor n in ['cart.ts','order.ts']:\n    open('src/'+n,'w').write('x')\nEOF")).toEqual(['cart.ts', 'order.ts'])
+    expect(bashWriteTargets("python3 - <<'EOF'\nfor d, f in [('src','a.ts')]:\n    open(d+'/'+f,'w').write('x')\nEOF")).toEqual(['a.ts'])
+    expect(bashWriteTargets("python3 - <<'EOF'\np='src/a.ts'\np='src/b.ts'\nopen(p+suffix,'w').write('x')\nEOF")).toEqual(['src/a.ts', 'src/b.ts'])
+  })
+
+  test('a write target behind a command substitution, or ~ with no HOME, is still judged', () => {
+    expect(bashWriteTargets(`sed -i 's/a/b/' "$(git rev-parse --show-toplevel)/src/a.ts"`)).toEqual(['src/a.ts'])
+    expect(bashWriteTargets('echo x | tee "$(pwd)/src/a.ts"')).toEqual(['src/a.ts'])
+    expect(bashWriteTargets('cp /tmp/a.ts `pwd`/src/a.ts')).toEqual(['src/a.ts'])
+    expect(bashWriteTargets(`python3 - "$(pwd)/src/a.py" <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('x')\nEOF`)).toEqual(['src/a.py'])
+    expect(bashWriteTargets('echo x > ~/p/src/a.ts')).toEqual(['~/p/src/a.ts'])
+    // Only a leading command's output is a folder; one further in stands for an unknown part.
+    expect(bashWriteTargets('echo x > src/$(n)/a.ts')).toEqual(['src/*/a.ts'])
+    // A variable set from a command's output is a folder not known.
+    expect(bashWriteTargets('ROOT=$(git rev-parse --show-toplevel)/app; cd "$ROOT" && echo x > src/a.ts')).toEqual(['src/a.ts'])
+  })
+
+  test('a computed target that starts at the working folder is judged by the rest; one under an env folder is left alone', () => {
+    expect(bashWriteTargets(`node -e "require('fs').writeFileSync(process.cwd() + '/src/a.js', 'x')"`)).toEqual(['src/a.js'])
+    expect(bashWriteTargets("python3 - <<'EOF'\nimport os\nROOT = os.getcwd()\nopen(ROOT + '/src/a.py','w').write('x')\nEOF")).toEqual(['src/a.py'])
+    expect(bashWriteTargets(`node -e "require('fs').writeFileSync(process.env.OUT + '/a.js', 'x')"`)).toEqual([])
+    // An unknown file name is no folder: the glob stays.
+    expect(bashWriteTargets("python3 - <<'EOF'\nfor n in names:\n    open(n + '.py','w').write('x')\nEOF")).toEqual(['*.py'])
+  })
+
+  test('~ in a write target is read from HOME', () => {
+    const home = new Map([['HOME', '/home/u']])
+    expect(targetsIn('echo x > ~/p/src/a.ts', p => isInScope(p, config), home)).toEqual(['/home/u/p/src/a.ts'])
+    expect(targetsIn("sed -i s/a/b/ ~/p/src/a.ts", p => isInScope(p, config), home)).toEqual(['/home/u/p/src/a.ts'])
+  })
+
+  test('a script that writes a path given on its command line writes that path', () => {
+    expect(bashWriteTargets("F=src/a.vue; python3 -I - \"$F\" <<'EOF'\nimport sys,pathlib\nf=pathlib.Path(sys.argv[1]); s=f.read_text()\nf.write_text(s)\nEOF")).toEqual(['src/a.vue'])
+    expect(bashWriteTargets("f=src/router/index.ts && python3 - \"$f\" <<'EOF'\nimport sys\np=sys.argv[1]\ns=open(p).read()\nopen(p,'w').write(s)\nEOF")).toEqual(['src/router/index.ts'])
+    expect(bashWriteTargets("node - src/a.js <<'EOF'\nconst fs=require('fs'); const p=process.argv[2]\nfs.writeFileSync(p, 'x')\nEOF")).toEqual(['src/a.js'])
+  })
+
+  test('argv after an inline script or an option that takes a value', () => {
+    // Layouts as python3 and node print them: `python3 -c code a` and `node -e code a` put a at argv[1].
+    expect(bashWriteTargets(`python3 -c 'import sys; open(sys.argv[1],"w").write("x")' src/a.py`)).toEqual(['src/a.py'])
+    expect(bashWriteTargets(`node -e "require('fs').writeFileSync(process.argv[1],'x')" src/a.js`)).toEqual(['src/a.js'])
+    expect(bashWriteTargets("F=src/a.py; python3 -W ignore - \"$F\" <<'EOF'\nimport sys\nopen(sys.argv[1],'w').write('x')\nEOF")).toEqual(['src/a.py'])
+    expect(bashWriteTargets("node -r ts-node/register - src/a.ts <<'EOF'\nrequire('fs').writeFileSync(process.argv[2],'x')\nEOF")).toEqual(['src/a.ts'])
+    expect(bashWriteTargets(`node --eval "require('fs').writeFileSync(process.argv[1],'x')" src/a.js`)).toEqual(['src/a.js'])
+    expect(bashWriteTargets(`python3 -Ic 'import sys; open(sys.argv[1],"w").write("x")' src/a.py`)).toEqual(['src/a.py'])
   })
 
   test('a scratch folder named .local is not judged by default', () => {

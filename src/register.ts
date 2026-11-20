@@ -270,15 +270,35 @@ async function readBefore($: EngineInterface, path: string): Promise<FileContent
   }
 }
 
-/** The project root, so a test folder is told apart from the folder the checkout lives in; '' when unknown. */
 /** The source files `command` writes that are judged: in a project of their own, and no tests. */
 async function judgedTargets($: EngineInterface, config: Config, roots: RootCache, command: string): Promise<string[]> {
   const judged: string[] = []
-  for (const path of bashWriteTargets(command, p => isInScope(p, config))) {
-    const root = await rootOf($, config, roots,path)
+  for (const path of bashWriteTargets(command, p => isInScope(p, config), await shellEnv($, command))) {
+    const root = await rootOf($, config, roots, path)
     if (root !== undefined && !isTestFile(path, root)) judged.push(path)
   }
   return judged
+}
+
+/**
+ * The environment a shell command starts with, as far as reading its paths
+ * needs: HOME for `~`, and CLAUDE_JOB_DIR, where a background job keeps its
+ * scratch files, so a write there is placed outside the project.
+ */
+async function shellEnv($: EngineInterface, command: string): Promise<Map<string, string>> {
+  // Only a `$` or a `~` reads the environment.
+  if (!/[$~]/.test(command)) return new Map()
+  // The engine lists what a mod reads, so each name is spelled out.
+  const read = async (value: () => Promise<string | undefined>) => {
+    try {
+      return await value()
+    } catch {
+      return undefined
+    }
+  }
+  const [home, job] = await Promise.all([read(() => $.env.get('HOME')), read(() => $.env.get('CLAUDE_JOB_DIR'))])
+  const entries: [string, string | undefined][] = [['HOME', home], ['CLAUDE_JOB_DIR', job]]
+  return new Map(entries.filter((v): v is [string, string] => v[1] !== undefined && v[1] !== ''))
 }
 
 /** The root of the project the source file `path` belongs to; undefined when it is not judged. */
@@ -290,6 +310,7 @@ async function rootOf($: EngineInterface, config: Config, roots: RootCache, path
   return own
 }
 
+/** The project root, so a test folder is told apart from the folder the checkout lives in; '' when unknown. */
 async function projectRoot($: EngineInterface): Promise<string> {
   try {
     return await $.session.root()

@@ -2,7 +2,8 @@
 // (https://github.com/nizos/probity, src/rules/enforce-tdd.ts).
 // Copyright (c) Nizar Selander, MIT License.
 // Changed here: RESPONSE_SPEC asks for a reason on "pass" too, so every
-// verdict in the debug log says why; the inputs add "Last test run".
+// verdict in the debug log says why; the inputs add "Last test run", which
+// can also be a run still in the background or a failing check.
 
 export const PROCESS_INSTRUCTIONS = `## Role
 
@@ -23,8 +24,10 @@ You will see these inputs:
 3. "Pending action" — what the agent is about to write. Content may be
    raw file text or a patch/diff in any common format.
 4. "Last test run" — the latest test command the agent ran in this
-   session, whether it was red or green, and its output, even when it
-   is older than the recent session, or that no test has run yet.
+   session, whether it was red or green (or is still running in the
+   background, or is a lint or static-analysis check that failed), and
+   its output, even when it is older than the recent session, or that
+   no test has run yet.
    A failure shown there is observed: production code that addresses
    it is the green step.
 
@@ -158,6 +161,35 @@ stand.
 Name the violation and say why it breaks TDD. Do not dictate edit
 order, require the file to be complete or runnable, or demand other
 steps be bundled into this write.`
+
+// Not from probity. In real sessions the judge blocked fixes a lint or
+// static-analysis rule asked for (a PMD finding, a SpotBugs report) as
+// "no failing test drove it", and the user had to approve a test written
+// only to get past the guard.
+export const CHECK_DRIVEN_CHANGES = `## Changes a failing check drives
+
+A failing lint, static-analysis or architecture check (PMD, SpotBugs,
+Checkstyle, ESLint, ArchUnit or a project rule) is a red step too. A
+change that satisfies the failing rule and keeps behaviour is its green
+step and needs no new failing test: for example a delegating constructor
+instead of a null argument, a narrower or wider visibility, a moved or
+removed import, a final modifier. This is the exception to the
+minimum-implementation rule above, for a change a failing check asks for;
+it is over-implementation when it adds behaviour the rule does not ask for.
+A type or compile error (an unknown symbol, a missing property) that the
+agent's own unfinished change caused is not such a check: implementing what
+it names still needs a failing test.`
+
+// Not from probity. A backend step was blocked because the red end-to-end
+// test had timed out waiting for the UI, which "names no code".
+export const OUTSIDE_IN_TESTS = `## Outside-in tests
+
+An outside-in test (end-to-end, UI, Playwright or an API test that drives
+the whole stack) may fail on a timeout or a missing element: that is its
+assertion failing, but it names no code. A production step, in any layer,
+that moves toward what the test waited for (the element, the text, the
+endpoint's answer) addresses it and is a green step; judge whether it does
+more than that test needs, not whether it is in the layer the failure shows.`
 
 // Not from probity: the `stubFirst` setting turned off.
 export const NO_STUB_STEP = `## Setting: no stub step

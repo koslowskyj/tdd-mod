@@ -1,7 +1,7 @@
 // Pure logic for the TDD guard: no `$`, so the tests can drive it directly.
 // Shapes follow probity's enforceTdd, trimHistory, applyEdit and toVerdict.
 import type { SessionMessage } from 'claude-code'
-import { DEFAULT_TDD_RULES, NO_STUB_STEP, PROCESS_INSTRUCTIONS, RESPONSE_SPEC } from './prompt.ts'
+import { CHECK_DRIVEN_CHANGES, DEFAULT_TDD_RULES, NO_STUB_STEP, OUTSIDE_IN_TESTS, PROCESS_INSTRUCTIONS, RESPONSE_SPEC } from './prompt.ts'
 
 export const MAX_EVENTS = 10
 export const MAX_CONTENT_CHARS = 6000
@@ -19,8 +19,12 @@ export type HistoryEvent =
   | { kind: 'prompt'; text: string }
   | { kind: 'tool'; tool: string; input: unknown; output: string; isError?: true }
 
-/** The latest test command the agent ran, what it printed, and whether it failed. */
-export type TestRun = { command: string; output: string; red: boolean }
+/**
+ * The latest test command the agent ran, what it printed, and whether it failed;
+ * `running` when it went to the background and no read shows it finished yet;
+ * `check` when it is a lint or static-analysis check that failed, not a test run.
+ */
+export type TestRun = { command: string; output: string; red: boolean; running?: true; check?: true }
 
 // A command that runs tests: a runner's test subcommand, a test runner by name
 // (not a file named after one, like jest.config.js), or a Maven/Gradle build.
@@ -30,6 +34,7 @@ const TEST_COMMAND = new RegExp(
   [
     String.raw`\b(?:npm|pnpm|yarn|bun|deno|go|cargo|dotnet|mix|swift|make|plugin)\s+(?:run\s+)?test\b`,
     String.raw`\b(?:vitest|jest|pytest|mocha|rspec|phpunit|unittest)(?![\w./-])`,
+    String.raw`\bplaywright\s+test\b`,
     String.raw`\bmvnw?\b.*(?<![\w:-])(?:test|verify|install|package)(?![\w:-])`,
     String.raw`\bgradlew?\b.*\b(?:test|check|build)\b`,
   ].join('|'),
@@ -47,6 +52,50 @@ const RED_OUTPUT =
 // The file a command sends its output to: `> f`, `>> f`, `2>&1 > f`, `&> f`, `| tee f`.
 const LOG_TARGET = /(?:(?:^|[^-=<>&\d])(?:\d|&)?>>?(?!&)|\btee(?:\s+-a)?)\s*(['"]?)([^\s;|&<>'"()]+)\1/g
 
+// A lint, type or static-analysis check: a failing one is a red step too (a passing one says nothing of the tests).
+// A tool counts where it runs: at the start of a command, or after a runner such as `npx`; not named in `grep eslint`.
+// After a separator or a newline, variables (`CI=1`), a runner with its options (`npx --yes`) or a path.
+const CHECK_COMMAND =
+  /(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*(?:(?:npx|bunx|pnpm\s+exec|pnpm|yarn|uv\s+run|poetry\s+run|python3?\s+-m|cargo)\s+(?:-[\w-]+\s+)*)?(?:\S*\/)?(eslint|oxlint|biome|tsc|ruff|mypy|pylint|flake8|golangci-lint|clippy)\b|\bmvnw?\b[^;&|\n]*\b(pmd|spotbugs|checkstyle):\w+|\bgradlew?\b[^;&|\n]*\b(pmd|spotbugs|checkstyle)\w*/
+
+/** The check tool `command` runs, lower-cased; undefined when it runs none. */
+function checkToolOf(command: string): string | undefined {
+  const m = CHECK_COMMAND.exec(command)
+  return (m?.[1] ?? m?.[2] ?? m?.[3])?.toLowerCase()
+}
+// What a check that found something prints: Maven/Gradle failures, ESLint's problems, tsc's `error TS`,
+// flake8/pylint's `a.py:1:1: F401`, golangci-lint's issues, clippy's `error:`, a rule violation count.
+const CHECK_FAILED =
+  /\bBUILD FAIL(?:URE|ED)\b|\[ERROR\]|\b[1-9]\d* (?:problems?|errors?|violations?|issues?)\b|\berror TS\d+|: error:|:\d+:\d+: [A-Z]+\d{3,4}\b|^error(?:\[\w+\])?:|rule violations were found/m
+// What a finished passing run prints: a run in the background is finished once a read shows this or a failure.
+// Only what a runner prints once at the end counts: Maven/Gradle's BUILD SUCCESS(FUL), Playwright's
+// `4 passed (3s)`, Vitest/Jest's `Tests: 4 passed`, pytest's `== 4 passed in`, PHPUnit/unittest's OK,
+// RSpec's `4 examples, 0 failures`, TAP's `# pass`. Not a test class's `Tests run: …` line, Go's
+// per-package `ok`, .NET's per-project `Passed!` or an umbrella app's `N tests, 0 failures`: those
+// come while the run goes on; such a run ends at the harness's completion notice.
+const PASS_SUMMARY =
+  /\bBUILD SUCCESS(?:FUL)?\b|^\s*[1-9]\d* passed \(|^\s*Tests:?\s+[1-9]\d* passed|=+ [1-9]\d* passed\b|^OK(?: \([1-9]\d* tests?[,)]|$)|\b[1-9]\d* examples, 0 failures\b|^# pass [1-9]/m
+// The notice the harness sends when a command in the background ends.
+const COMPLETION_NOTICE = /<output-file>([^<]+)<\/output-file>[\s\S]*?<status>(completed|failed|killed)<\/status>/
+
+// What a command refused before it ran answers: this mod's own shell-write guard, another hook, the permission check.
+const REFUSED_OUTPUT = /^\s*(?:<tool_use_error>)?\s*(?:tdd-mod:|PreToolUse:\w+ hook (?:error|blocked)|Permission to use \w+[^\n]* denied|The user doesn't want to proceed)/
+
+/** Whether a tool call ran: a refused one never did, whatever its command says. */
+function didRun(event: HistoryEvent): boolean {
+  return !(event.kind === 'tool' && event.isError === true && REFUSED_OUTPUT.test(event.output))
+}
+
+// What a Bash call run in the background answers: where its output goes.
+const BACKGROUND_OUTPUT = /Output is being written to: (\S+?)\.?(?=\s|$)/
+
+/** The file a Read call reads; undefined for any other tool. */
+function readPathOf(event: HistoryEvent): string | undefined {
+  if (event.kind !== 'tool' || event.tool !== 'Read') return undefined
+  const path = (event.input as { file_path?: unknown } | null)?.file_path
+  return typeof path === 'string' ? path : undefined
+}
+
 function commandOf(event: HistoryEvent | undefined): string | undefined {
   if (event?.kind !== 'tool' || event.tool !== 'Bash') return undefined
   const command = (event.input as { command?: unknown } | null)?.command
@@ -54,21 +103,55 @@ function commandOf(event: HistoryEvent | undefined): string | undefined {
 }
 
 /**
- * The latest test run. A run whose output went to a log (`mvn test > t.log;
- * echo rc=$?`) is read with the later commands that read that log.
+ * The latest test run, or the latest failing lint or static-analysis check
+ * when that came later. A tool call a hook or the permission check refused
+ * never ran and is skipped. A run whose output went to a log (`mvn test > t.log;
+ * echo rc=$?`) is read with the later commands that read that log; a run sent
+ * to the background, with the later Bash or Read calls on its output file,
+ * and it is running until one of them shows it failed or passed.
  */
 export function lastTestRun(events: readonly HistoryEvent[]): TestRun | undefined {
+  const passedChecks = new Set<string>()
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]
     const command = commandOf(event)
-    if (event?.kind !== 'tool' || command === undefined || !isTestCommand(command)) continue
-    const logs = [...command.matchAll(LOG_TARGET)].map(m => m[2] ?? '').filter(log => log !== '' && !log.startsWith('/dev/'))
+    if (event?.kind !== 'tool' || command === undefined || !didRun(event)) continue
+    const isTest = isTestCommand(command)
+    const tool = isTest ? undefined : checkToolOf(command)
+    if (!isTest && (tool === undefined || passedChecks.has(tool))) continue
+    const backgroundLog = BACKGROUND_OUTPUT.exec(event.output)?.[1]
+    const logs = [
+      ...[...command.matchAll(LOG_TARGET)].map(m => m[2] ?? '').filter(log => log !== '' && !log.startsWith('/dev/')),
+      ...(backgroundLog === undefined ? [] : [backgroundLog]),
+    ]
     const reads = events.slice(i + 1).flatMap(later => {
-      const read = commandOf(later)
-      return later.kind === 'tool' && read !== undefined && logs.some(log => read.includes(log)) ? [`$ ${read}\n${later.output}`] : []
+      const readTarget = commandOf(later) ?? readPathOf(later)
+      return later.kind === 'tool' && didRun(later) && readTarget !== undefined && logs.some(log => readTarget.includes(log))
+        ? [`$ ${readTarget}\n${later.output}`]
+        : []
     })
+    // The harness's notice that the command in the background ended, and how; each notice of a prompt on its own.
+    const status = events.slice(i + 1).flatMap(later =>
+      later.kind !== 'prompt'
+        ? []
+        : [...later.text.matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)].flatMap(([block]) => {
+            const notice = COMPLETION_NOTICE.exec(block)
+            return notice && notice[1]?.trim() === backgroundLog ? [notice[2]] : []
+          }),
+    )[0]
     const output = [event.output, ...reads].join('\n')
-    return { command, output, red: event.isError === true || RED_OUTPUT.test(output) }
+    const red = event.isError === true || RED_OUTPUT.test(output) || status === 'failed'
+    if (tool !== undefined) {
+      // Only findings make it red: a check that crashed or is not installed ran no rule, and passed none.
+      if (CHECK_FAILED.test(output)) return { command, output, red: true, check: true }
+      // A check that passed says nothing of the tests, and clears the earlier failures of the same tool.
+      if (!red) passedChecks.add(tool)
+      continue
+    }
+    // A run killed before it ended has no result: it stays running.
+    const ended = status === 'completed' || status === 'failed'
+    if (backgroundLog !== undefined && !red && !ended && !PASS_SUMMARY.test(reads.join('\n'))) return { command, output, red: false, running: true }
+    return { command, output, red }
   }
   return undefined
 }
@@ -94,16 +177,17 @@ const ASSERTION_FAILED =
  * a block does not end in a retry of the same write.
  */
 export function nextStep(run: TestRun | undefined, stubFirst = true): string {
-  const step = !run
-    ? 'Next: write a failing test for this change and run it, then make the smallest change that passes it.'
-    : !run.red
-      ? 'Next: write and run a failing test for the new behaviour first; a refactor under green must not change behaviour.'
-      : ASSERTION_FAILED.test(run.output)
-        ? 'Next: change only what the failing assertion needs, or run the test this change is for.'
-        : stubFirst
-          ? 'Next: write only a placeholder stub that lets the test compile or import, and rerun the tests to see its assertion fail.'
-          : 'Next: change only what the failing test needs, or run the test this change is for.'
-  return `${step} The same write is blocked again until a new test run.`
+  return `${stepAfter(run, stubFirst)} The same write is blocked again until a new test run.`
+}
+
+function stepAfter(run: TestRun | undefined, stubFirst: boolean): string {
+  if (!run) return 'Next: write a failing test for this change and run it, then make the smallest change that passes it.'
+  if (run.running) return 'Next: read the output of the test run in the background, so its result is known, then write the change it calls for.'
+  if (run.check) return 'Next: change only what the failing check asks for, keeping behaviour, and rerun the check.'
+  if (!run.red) return 'Next: write and run a failing test for the new behaviour first; a refactor under green must not change behaviour.'
+  if (ASSERTION_FAILED.test(run.output)) return 'Next: change only what the failing assertion needs, or run the test this change is for.'
+  if (stubFirst) return 'Next: write only a placeholder stub that lets the test compile or import, and rerun the tests to see its assertion fail.'
+  return 'Next: change only what the failing test needs, or run the test this change is for.'
 }
 
 /**
@@ -253,15 +337,21 @@ const GREEN_REFACTOR =
   'The tests are green, so this may be the refactor step. A change that keeps ' +
   'behaviour passes without a new failing test: extracting a helper from code ' +
   'that already exists, inlining, renaming, restructuring, or removing unused ' +
-  'code (a field, an import, a function nothing calls). Block it only when it ' +
-  'adds behaviour that no test drove.'
+  'code (a field, an import, a function nothing calls). So does a change no ' +
+  'unit test can observe and that adds no branching logic: styling (CSS, a ' +
+  'theme rule), a log line, or registering a class with a framework (reflection ' +
+  'or native-image config, a DI binding). Block it only when it adds behaviour ' +
+  'that no test drove.'
 
 // Left unsaid, the judge assumed a test it could not see and passed a stub
 // written before any test (/tdd-eval "stub before any test").
 const NO_TEST_RUN = '## Last test run\n\nNo test has run in this session yet, so no failure has been observed.'
 
 function formatTestRun(run: TestRun): string {
-  const result = run.red ? 'red: a test failed' : 'green: every test passed'
+  if (run.running) {
+    return `## Last test run\n\n\`${clip(run.command, MAX_INPUT_CHARS)}\` is still running in the background; whether it is red or green is not known yet.`
+  }
+  const result = run.check ? 'red: a check failed (lint or static analysis, not a test)' : run.red ? 'red: a test failed' : 'green: every test passed'
   const output = `## Last test run\n\n\`${clip(run.command, MAX_INPUT_CHARS)}\` was ${result}. Its output:\n\n${clip(run.output, MAX_CONTENT_CHARS)}`
   return run.red ? output : `${output}\n\n${GREEN_REFACTOR}`
 }
@@ -274,7 +364,7 @@ export function buildPrompt(
   also: readonly Change[] = [],
   options: { stubFirst?: boolean } = {},
 ): string {
-  const sections = [PROCESS_INSTRUCTIONS, DEFAULT_TDD_RULES]
+  const sections = [PROCESS_INSTRUCTIONS, DEFAULT_TDD_RULES, CHECK_DRIVEN_CHANGES, OUTSIDE_IN_TESTS]
   if (options.stubFirst === false) sections.push(NO_STUB_STEP)
   const recent = trimHistory(history)
   if (recent.length > 0) {

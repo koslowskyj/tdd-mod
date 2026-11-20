@@ -7,7 +7,9 @@
 // `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, then the body up to the line that ends it.
 const HEREDOC = /<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g
 // `>`, `>>`, `>|`, `2>`, `&>` followed by a target; not `>&2` and not `->`/`=>`.
-const REDIRECT = /(?:^|[^-=<>])(?:\d|&)?>[>|]?(?!&)\s*(['"]?)([^\s;|&<>'"()]+)\1/g
+// A quoted target (`> "a b.ts"`) holds no `>`, `;`, `|`, `&` or newline, so a `>` inside a string
+// cannot take the string's closing quote for a target's opening one and run over the redirect after it.
+const REDIRECT = /(?:^|[^-=<>])(?:\d|&)?>[>|]?(?!&)\s*(?:(['"])([^'"\n;|&<>]+)\1|((?:\$\([^()\s]*\)|[^\s;|&<>'"()])+))/dg
 // Inline interpreters: Python open(..., 'w'|'a'), write_text/write_bytes, Node writeFile(Sync).
 // Ruby File.write, Perl open($fh, '>', …), PHP file_put_contents and fopen, Deno and Bun writes too.
 const SCRIPT_WRITE =
@@ -16,6 +18,15 @@ const SCRIPT_WRITE =
 const PATH_LITERAL = /['"`]([^'"`\s@*][^'"`\s*]*\.\w+)['"`]/g
 // A command that runs a script, as `python3 -`, `/usr/bin/node -e`, `uv run python`: not `cat > f <<EOF`.
 const INTERPRETER = /(?:^|\/)(?:python[\d.]*|node(?:js)?|deno|bun|tsx|ts-node|ruby|perl|php)$/
+// An interpreter option whose value is the next word: python `-W ignore`, `-X utf8`; node `-r mod`, `--require mod`.
+const VALUE_OPTION = /^(?:-[WXrC]|--(?:require|import|loader|experimental-loader|conditions))$/
+// A command's output in a path, `$(…)` (one level of nesting) or backticks; and one that leads the path.
+const COMMAND_OUTPUT = /\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`/g
+const COMMAND_OUTPUT_LEADING = /^(?:\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`)\/?/
+// A folder a script takes from the environment: `process.env.OUT`, `os.environ['OUT']`, `os.getenv('OUT')`, `$ENV{OUT}`.
+const ENV_FOLDER = /^\s*(?:process\.env\b|os\.environ\b|os\.getenv\(|\$ENV\{|ENV\[|Deno\.env\.get\(|getenv\()/
+// The part of a computed script target not followed here, as a glob.
+const UNKNOWN_PART = '*'
 // `NAME=value`, a shell variable assignment.
 const ASSIGNMENT = /^([A-Za-z_]\w*)=(.*)$/s
 const VARIABLE = /\$\{?([A-Za-z_]\w*)\}?/g
@@ -26,10 +37,20 @@ const VARIABLE = /\$\{?([A-Za-z_]\w*)\}?/g
  */
 type Command = { words: string[]; at: number; dir: string | undefined; vars: ReadonlyMap<string, string> }
 
-/** `path` with the shell variables `vars` knows filled in; undefined when it names one they do not. */
+/**
+ * `path` with the shell variables `vars` knows filled in, and `~` as `$HOME`
+ * when HOME is known (left as it is otherwise, so the write is still judged);
+ * undefined when it names a variable they do not. A command's output
+ * (`$(pwd)/src/a.ts`, backticks) is a folder not known: what follows it is
+ * read from where the session is, as after a `cd` into a folder not known.
+ */
 function expand(path: string, vars: ReadonlyMap<string, string>): string | undefined {
+  // A leading output is the folder; one further in stands for an unknown part of the path.
+  const afterOutput = path.replace(COMMAND_OUTPUT_LEADING, '').replace(COMMAND_OUTPUT, UNKNOWN_PART)
+  if (afterOutput === '') return undefined
   let unknown = false
-  const expanded = path.replace(VARIABLE, (_, name: string) => {
+  const home = vars.has('HOME') ? afterOutput.replace(/^~(?=\/|$)/, '$HOME') : afterOutput
+  const expanded = home.replace(VARIABLE, (_, name: string) => {
     const value = vars.get(name)
     if (value === undefined) unknown = true
     return value ?? ''
@@ -37,7 +58,11 @@ function expand(path: string, vars: ReadonlyMap<string, string>): string | undef
   return unknown ? undefined : expanded
 }
 
-/** `path` as seen from `dir`, `.` and `..` folded; unchanged when it is absolute or the directory is unknown. */
+/**
+ * `path` as seen from `dir`, `.` and `..` folded; unchanged when it is absolute.
+ * Relative to a directory not known, it is left relative: that folder could be
+ * the project itself, so the write is still judged, from where the session is.
+ */
 function resolveIn(dir: string | undefined, path: string): string {
   if (dir === undefined || /^[/$~]/.test(path)) return path
   const parts: string[] = []
@@ -56,10 +81,10 @@ function resolveIn(dir: string | undefined, path: string): string {
  * Each carries the directory the `cd`s before it left, relative to where the
  * shell started ('' there), so a relative path can be read from where it runs.
  */
-function commands(shell: string): Command[] {
+function commands(shell: string, env: ReadonlyMap<string, string>): Command[] {
   const result: Command[] = []
   let dir: string | undefined = ''
-  let vars = new Map<string, string>()
+  let vars = new Map(env)
   let words: string[] = []
   let word = ''
   let at = 0
@@ -72,14 +97,25 @@ function commands(shell: string): Command[] {
     endWord()
     if (words[0]?.startsWith('(')) words[0] = words[0].slice(1)
     if (words.length > 0) result.push({ words, at, dir, vars })
-    if (words[0] === 'cd') dir = words.length === 2 && !/^[-$~]/.test(words[1] ?? '') ? resolveIn(dir, words[1] ?? '') : undefined
+    if (words[0] === 'cd') {
+      // A variable the commands before it set, or the environment gives, is filled in; `cd` alone is `cd ~`.
+      // `cd -`, `cd ~user`, a command's output or a relative step from an unknown folder leaves it unknown.
+      const args = words.slice(1).filter(w => !/^(?:-[LPe@]+|--)$/.test(w))
+      const arg = args[0] ?? '~'
+      const destination = args.length <= 1 && arg !== '-' && !/\$\(|`/.test(arg) ? expand(arg, vars) : undefined
+      dir =
+        destination === undefined || destination.startsWith('~') || (dir === undefined && !destination.startsWith('/'))
+          ? undefined
+          : resolveIn(dir, destination)
+    }
     // `D=src/x` or `export D=src/x` alone sets a variable for the commands after it.
     const assigned = words[0] === 'export' ? words.slice(1) : words
     if (assigned.length > 0 && assigned.every(w => ASSIGNMENT.test(w))) {
       vars = new Map(vars)
       for (const w of assigned) {
         const [, name = '', value = ''] = ASSIGNMENT.exec(w) ?? []
-        const known = expand(value, vars)
+        // A value from a command's output (`ROOT=$(pwd)/app`) is not known.
+        const known = /\$\(|`/.test(value) ? undefined : expand(value, vars)
         if (known === undefined) vars.delete(name)
         else vars.set(name, known)
       }
@@ -103,8 +139,12 @@ function commands(shell: string): Command[] {
   return result
 }
 
-/** The source files `command` would write that `inScope` accepts, deduplicated, in order of appearance. */
-export function bashWriteTargets(command: string, inScope: (path: string) => boolean): string[] {
+/**
+ * The source files `command` would write that `inScope` accepts, deduplicated,
+ * in order of appearance. `env` holds the variables the command starts with
+ * (HOME for `~`), read like those it assigns.
+ */
+export function bashWriteTargets(command: string, inScope: (path: string) => boolean, env: ReadonlyMap<string, string> = new Map()): string[] {
   const targets: string[] = []
   // The command without its heredoc bodies, and each body with where it stood.
   const heredocs: { at: number; body: string }[] = []
@@ -118,15 +158,23 @@ export function bashWriteTargets(command: string, inScope: (path: string) => boo
   }
   shell += command.slice(last)
 
-  const parsed = commands(shell)
-  const start: Command = { words: [], at: 0, dir: '', vars: new Map() }
+  const parsed = commands(shell, env)
+  const start: Command = { words: [], at: 0, dir: '', vars: env }
   // A path as the command at `where` sees it; one through an unknown variable is left alone.
   const place = (where: Pick<Command, 'dir' | 'vars'>, path: string) => {
     const expanded = expand(path, where.vars)
     if (expanded !== undefined) targets.push(resolveIn(where.dir, expanded))
   }
 
-  for (const m of shell.matchAll(REDIRECT)) place(parsed.findLast(c => c.at <= m.index) ?? start, m[2] ?? '')
+  // Quoted text hidden, so a `>` in `'Result<Integer> x'` is no redirect; a quoted target is read back from the shell.
+  // Where the quoting is not clear-cut to a regex (a comment, `$(…)`, backticks, an escaped quote, a quote
+  // left open), nothing is hidden: a redirect read wrongly as quoted would let a write through.
+  const clearCut = !/#|\$\(|`|\\['"]/.test(shell) && (shell.match(/'[^']*'|"(?:[^"\\]|\\.)*"|['"]/g) ?? []).every(q => q.length > 1)
+  const masked = clearCut ? shell.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, q => q[0] + 'x'.repeat(q.length - 2) + q[0]) : shell
+  for (const m of masked.matchAll(REDIRECT)) {
+    const [from, to] = (m[2] ? m.indices?.[2] : m.indices?.[3]) ?? [0, 0]
+    place(parsed.findLast(c => c.at <= m.index) ?? start, shell.slice(from, to))
+  }
 
   for (const { words: [cmd, ...args], dir, vars } of parsed) {
     const operands = args.filter(a => !a.startsWith('-'))
@@ -154,12 +202,12 @@ export function bashWriteTargets(command: string, inScope: (path: string) => boo
   // from where the command that runs it stands. When a target is computed in
   // a way not followed here, every source path the script names counts. A
   // heredoc fed to `cat > f` is content.
-  parsed.forEach(({ words, at, dir }, i) => {
+  parsed.forEach(({ words, at, dir, vars }, i) => {
     if (!words.some(w => INTERPRETER.test(w))) return
     const end = parsed[i + 1]?.at ?? Infinity
     const script = [words.join(' '), ...heredocs.filter(h => h.at >= at && h.at < end).map(h => h.body)].join('\n')
     if (!SCRIPT_WRITE.test(script)) return
-    const written = scriptTargets(script) ?? [...script.matchAll(PATH_LITERAL)].map(m => m[1] ?? '')
+    const written = scriptTargets(script, argvOf(words, vars)) ?? [...script.matchAll(PATH_LITERAL)].map(m => m[1] ?? '')
     targets.push(...written.map(path => resolveIn(dir, path)))
   })
 
@@ -192,6 +240,37 @@ const TYPED = /\.\w+$/
 const HELPER = /\b(?:def|function)[ \t]+(\w+)[ \t]*\([ \t]*\$?(\w+)/g
 
 /**
+ * What a script reads as its arguments, from the command that runs it:
+ * `python3 -I - "$F"` gives `sys.argv[1]` = F, `node - a.js` gives `process.argv[2]` = a.js.
+ */
+function argvOf(words: readonly string[], vars: ReadonlyMap<string, string>): Map<string, string[]> {
+  const interpreterAt = words.findIndex(w => INTERPRETER.test(w))
+  const rest = words.slice(interpreterAt + 1).filter(w => !/^\d*[<>&]/.test(w))
+  let k = 0
+  let isInline = false
+  for (; k < rest.length && (rest[k] ?? '').startsWith('-') && rest[k] !== '-'; k++) {
+    // `-c code` / `-e code` / `-m module`: the script is the next word, and argv starts after it.
+    if (/^-(?:[A-Za-z]*[cem]|p|-eval|-print)$/.test(rest[k] ?? '')) {
+      isInline = true
+      k += 2
+      break
+    }
+    if (VALUE_OPTION.test(rest[k] ?? '')) k++
+  }
+  const isPython = /python/.test(words[interpreterAt] ?? '')
+  const positional = rest.slice(k)
+  // As python3 and node print it: `python3 - a` and `python3 -c code a` give argv[1] = a,
+  // `node - a` gives process.argv[2] = a and `node -e code a` gives process.argv[1] = a.
+  const argv = isPython ? (isInline ? ['-c', ...positional] : positional) : ['node', ...positional]
+  return new Map(
+    argv.flatMap((word, n) => {
+      const value = expand(word, vars)
+      return value === undefined ? [] : [[isPython ? `sys.argv[${n}]` : `process.argv[${n}]`, [value]] as const]
+    }),
+  )
+}
+
+/**
  * The values `expression` can take: a glob's pattern when it names a file
  * type, or string literals and names joined by `+`; undefined when a part is unknown.
  */
@@ -214,25 +293,47 @@ function evaluate(expression: string, names: ReadonlyMap<string, string[]>): str
 
 /**
  * The files an inline script writes, from its literals, the names it assigns
- * them to, and the helpers it passes them to; undefined when one is out of reach.
+ * them to, the helpers it passes them to, and its arguments (`argv`: the
+ * `sys.argv[n]`/`process.argv[n]` values); undefined when one is out of reach.
+ * A target built from known and unknown parts is placed by its known parts
+ * when they settle the file type, and left alone when it starts unknown.
  */
-function scriptTargets(script: string): string[] | undefined {
-  const names = new Map<string, string[]>()
+function scriptTargets(script: string, argv: ReadonlyMap<string, string[]> = new Map()): string[] | undefined {
+  const names = new Map(argv)
   for (const [, name = '', expression = ''] of script.replaceAll(';', '\n').matchAll(SCRIPT_ASSIGNMENT)) {
     const values = evaluate(expression, names)
     if (values !== undefined) names.set(name, [...(names.get(name) ?? []), ...values])
   }
   const helpers = new Map([...script.matchAll(HELPER)].map(([, fn = '', param = '']) => [param, fn]))
   const targets: string[] = []
+  let sites = 0
   for (const site of WRITE_SITES) {
     for (const [, argument = ''] of script.matchAll(site)) {
-      const values = evaluate(argument, names) ?? viaHelper(argument)
+      const values = evaluate(argument, names) ?? viaHelper(argument) ?? knownPartsPattern(argument)
       if (values === undefined) return undefined
       targets.push(...values)
+      sites++
     }
   }
   // The script writes (SCRIPT_WRITE said so) where no site here is recognised.
-  return targets.length > 0 ? targets : undefined
+  return sites > 0 ? targets : undefined
+
+  // `'/tmp/' + name + '.new'`: the known parts with `*` for the rest. One that starts
+  // unknown (`process.env.J + '/a.js'`) is somewhere not known, left alone like an unknown variable.
+  // Undefined (every source path the script names counts) unless the known parts settle the file type.
+  // One that starts unknown is read from where the session is (`process.cwd() + '/src/a.js'` is `src/a.js`),
+  // unless it starts at an environment variable, a folder set from outside such as a scratch folder: left alone.
+  function knownPartsPattern(expression: string): string[] | undefined {
+    const raw = expression.split(/\s*\+\s*/)
+    const parts = raw.map(part => evaluate(part, names))
+    if (parts.length < 2 || parts.every(p => p === undefined) || parts.some(p => p !== undefined && p.length !== 1)) return undefined
+    const pattern = parts.map(p => p?.[0] ?? UNKNOWN_PART).join('').replace(/\*+/g, UNKNOWN_PART)
+    if (!TYPED.test(pattern.slice(pattern.lastIndexOf('/') + 1))) return undefined
+    if (!pattern.startsWith(UNKNOWN_PART)) return [pattern]
+    if (ENV_FOLDER.test(raw[0] ?? '')) return []
+    // Only an unknown folder is the session's (`* + '/src/a.js'`); an unknown file name keeps its glob (`*.py`).
+    return pattern.startsWith(`${UNKNOWN_PART}/`) ? [pattern.slice(UNKNOWN_PART.length + 1)] : [pattern]
+  }
 
   // A helper's parameter: what each call passes it.
   function viaHelper(param: string): string[] | undefined {

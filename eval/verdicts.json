@@ -2048,5 +2048,178 @@
    "path": "src/calculator.ts",
    "content": "export function add(numbers: string): number {\n  if (numbers === \"\") return 0;\n  return numbers.split(/[,\\n]/).map(Number).reduce((sum, n) => sum + n, 0);\n}\n"
   }
+ },
+ {
+  "name": "lint fix: a delegating constructor instead of a null argument",
+  "expect": "pass",
+  "why": "A failing PMD rule drives the change; the delegating constructor keeps behaviour.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Fix the PMD finding NullConstructorArgument at OrderRepository.java:42."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "mvn -q verify"
+    },
+    "output": "Exit code 1\n[ERROR] PMD Failure: com.example.orders.OrderRepository:42 Rule:NullConstructorArgument Priority:1 Do not pass null as a constructor argument; add a constructor without the parameter.\n[ERROR] BUILD FAILURE",
+    "isError": true
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "package com.example.orders;\n\npublic record OrderView(String id, String note, Boolean flagged) {}\n"
+  },
+  "pending": {
+   "path": "src/main/java/com/example/orders/OrderView.java",
+   "content": "package com.example.orders;\n\npublic record OrderView(String id, String note, Boolean flagged) {\n    public OrderView(String id, String note) {\n        this(id, note, null);\n    }\n}\n"
+  }
+ },
+ {
+  "name": "styling under green: a dark-theme CSS rule",
+  "expect": "pass",
+  "why": "Styling with no branching logic under a green suite needs no new failing test.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "The panel looks wrong in dark mode; give it the dark surface colour."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "npx vitest run src/components"
+    },
+    "output": "Test Files  4 passed (4)\n     Tests  31 passed (31)"
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "<template><div class=\"panel\"><slot /></div></template>\n<style scoped>\n.panel { background: var(--surface); }\n</style>\n"
+  },
+  "pending": {
+   "path": "src/components/Panel.vue",
+   "content": "<template><div class=\"panel\"><slot /></div></template>\n<style scoped>\n.panel { background: var(--surface); }\n:root[data-theme=\"dark\"] .panel { background: var(--surface-dark); }\n</style>\n"
+  }
+ },
+ {
+  "name": "outside-in: a backend step under a red UI timeout",
+  "expect": "pass",
+  "why": "The Playwright test is red on a timeout waiting for the export result; returning the rows is a step on the path it drives.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Implement exporting orders: the export dialog lists every exported order."
+   },
+   {
+    "kind": "tool",
+    "tool": "Write",
+    "input": {
+     "file_path": "e2e/export.spec.ts",
+     "content": "test('export lists every order', async ({ page }) => { await page.getByTestId('export').click(); await expect(page.getByTestId('export-dialog').getByRole('listitem')).toHaveCount(2) })"
+    },
+    "output": "File created successfully"
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "npx playwright test e2e/export.spec.ts"
+    },
+    "output": "1 failed\n  e2e/export.spec.ts:3 export lists every order\n    TimeoutError: locator.toHaveCount: Timeout 5000ms exceeded.\n    waiting for getByTestId('export-dialog').getByRole('listitem')\n    Expected: 2  Received: 0",
+    "isError": true
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "class OrderExport {\n    ExportResult export(ExportPlan plan) {\n        return ExportResult.empty();\n    }\n}\n"
+  },
+  "pending": {
+   "path": "src/main/java/com/example/orders/OrderExport.java",
+   "content": "class OrderExport {\n    ExportResult export(ExportPlan plan) {\n        return new ExportResult(plan.orders().stream().map(this::rowOf).toList());\n    }\n}\n"
+  }
+ },
+ {
+  "name": "registration under green: a class added to the native-image reflection list",
+  "expect": "pass",
+  "why": "Registering a class with the framework adds no logic a unit test could observe; the suite is green.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "The native build fails to serialize InvoiceView; register it for reflection."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "mvn -q test"
+    },
+    "output": "Tests run: 48, Failures: 0, Errors: 0, Skipped: 0\nBUILD SUCCESS"
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "final class ReflectionConfig {\n    static final Class<?>[] TYPES = { OrderView.class };\n}\n"
+  },
+  "pending": {
+   "path": "src/main/java/com/example/ReflectionConfig.java",
+   "content": "final class ReflectionConfig {\n    static final Class<?>[] TYPES = { OrderView.class, InvoiceView.class };\n}\n"
+  }
+ },
+ {
+  "name": "log line under green",
+  "expect": "pass",
+  "why": "A log line with no branching logic under a green suite needs no new failing test.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Log the address the server listens on at startup."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "go test ./..."
+    },
+    "output": "ok  \texample.com/app\t0.41s"
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "func main() {\n\tcfg := load()\n\tserve(cfg)\n}\n"
+  },
+  "pending": {
+   "path": "cmd/app/main.go",
+   "content": "func main() {\n\tcfg := load()\n\tlog.Printf(\"listening on %s\", cfg.Addr)\n\tserve(cfg)\n}\n"
+  }
+ },
+ {
+  "name": "under green, a null guard no test drove is still blocked",
+  "expect": "violation",
+  "why": "A new branch (null returns 0) adds behaviour; the green allowance for styling, logging and registration does not cover it.",
+  "history": [
+   {
+    "kind": "prompt",
+    "text": "Make Totals.sum robust."
+   },
+   {
+    "kind": "tool",
+    "tool": "Bash",
+    "input": {
+     "command": "mvn -q test"
+    },
+    "output": "Tests run: 48, Failures: 0, Errors: 0, Skipped: 0\nBUILD SUCCESS"
+   }
+  ],
+  "before": {
+   "kind": "present",
+   "content": "class Totals {\n    static int sum(List<Integer> xs) {\n        return xs.stream().mapToInt(i -> i).sum();\n    }\n}\n"
+  },
+  "pending": {
+   "path": "src/main/java/com/example/Totals.java",
+   "content": "class Totals {\n    static int sum(List<Integer> xs) {\n        if (xs == null) return 0;\n        return xs.stream().mapToInt(i -> i).sum();\n    }\n}\n"
+  }
  }
 ]

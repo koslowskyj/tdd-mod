@@ -39,10 +39,22 @@ or process per write.
   already seen is judged as the green step it is. A run whose output went to
   a log (`mvn test > t.log 2>&1; echo rc=$?`) is read together with the later
   commands that read that log, and an echoed non-zero `rc=`/`exit=` is red.
+  A run sent to the background is read from the reads of its output file;
+  until one shows it failed or passed, the judge is told it is still running,
+  not that it is green. A test command a hook or the permission check refused
+  never ran and is no test run.
 - **Refactors pass while green.** When the last test run was green, the judge
   is told that this may be the refactor step: extracting a helper from existing
   code, inlining, renaming, or removing unused code passes without a new
-  failing test, unless the change adds behaviour.
+  failing test, unless the change adds behaviour. So do styling, a log line,
+  and registering a class with a framework (reflection config, a DI binding),
+  when no unit test can observe the change and it adds no branching logic.
+- **A failing check is a red step too.** A lint, static-analysis or
+  architecture check (`mvn pmd:check`, `eslint`, `tsc`, `ruff`, …) that
+  reports findings is the last run when it came after the tests, until a rerun
+  passes, and a change that satisfies it and keeps behaviour passes without a
+  new failing test; a passing check says nothing of the tests. An outside-in test (e2e, UI) that fails on a timeout is red,
+  and a production step in any layer toward what it waited for is green.
 - **Only on coding tasks.** Each prompt you type is labelled *coding* (adds,
   changes or fixes behaviour) or *other* (moving or renaming code, extracting,
   formatting, docs, config, questions, git). On *other* nothing is blocked. The
@@ -67,9 +79,19 @@ or process per write.
   `Path(p).write_text`, `writeFileSync`), followed through the names and
   helper functions it passes them to, so a script that edits a doc and quotes
   a source path in it is no source write; only when its target is out of
-  reach does every source path it names count. `$VAR` in a path is read from
-  an earlier `VAR=…` in the command; a path through a variable the command
-  does not set is left alone.
+  reach does every source path it names count; a target built from known and
+  unknown parts (`'/tmp/' + name + '.new'`) is placed by its known parts when
+  they settle the file type. A script that writes a path given on its command
+  line (`python3 - "$F"` with `sys.argv[1]`) writes that path. `$VAR` in a
+  path or a `cd` is read from an earlier `VAR=…` in the command, or from the
+  environment for `HOME` (so `~`) and `CLAUDE_JOB_DIR` (a background job's
+  scratch folder, outside the project). A path through a variable the command
+  does not set is left alone. A relative path after a `cd` into a folder not
+  known (`cd "$(…)"`, `cd -`), or behind a command's output
+  (`"$(pwd)/src/a.ts"`), is judged from where the session is, since that
+  folder could be the project. A `>` inside quotes is text, not a redirect,
+  where the quoting is clear-cut; with a comment, `$(…)` or an escaped quote
+  in the command, every `>` counts.
 - **Judges every repository, leaves scratch files alone.** A write outside the
   folder the session started in is judged when the file lives in a git
   repository of its own: the nearest folder above it holding `.git` (a folder,
@@ -81,7 +103,7 @@ or process per write.
   Each folder's root is looked up once per session.
 - **Passes every write to a test file** without asking the model (`Write`,
   `Edit` and `NotebookEdit`): writing a test is the red step itself. A test file is one in a `test/`, `tests/` or
-  `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`,
+  `__tests__/` folder (so `src/test/` too), or named `*.test.*`, `*.spec.*`, `*.stories.*`,
   `*Test.java`/`.kt`, `*IT.java`/`.kt`, `test_*.py`, `*_test.py` or
   `*_test.go`.
 - **Passes a write that adds exactly one test** to any other file (in-source
@@ -241,7 +263,7 @@ starts, and the built-in patterns stay in place.
 ## Measuring the judge: `/tdd-eval`
 
 `eval/` holds a small regression set built from kata runs and a guarded
-implementation run: 23 labelled writes (`verdicts.json`) and 15 labelled
+implementation run: 29 labelled writes (`verdicts.json`) and 15 labelled
 prompts (`tasks.json`). `/tdd-eval [runs]`
 replays them through exactly the decisions a session makes, with the
 configured models, and reports the hit rate per case:
@@ -361,10 +383,12 @@ manual.
   starts over when the mod reloads.
 - **A test run is recognised by its command**: a runner's `test` subcommand
   (`npm test`, `go test`, `cargo test`, `claude plugin test`, …), a runner by
-  name (`vitest`, `jest`, `pytest`, …) or a Maven/Gradle build. A project
-  script (`./check_all.sh`) is not one. It counts as red when the command
-  failed or its output reads like a failure (`FAIL`, `1 failed`,
-  `Failures: 2`, `AssertionError`, `panicked`), green otherwise.
+  name (`vitest`, `jest`, `pytest`, `playwright test`, …) or a Maven/Gradle
+  build. A project script (`./check_all.sh`) is not one. It counts as red when
+  the command failed or its output reads like a failure (`FAIL`, `1 failed`,
+  `Failures: 2`, `AssertionError`, `panicked`), green otherwise; a run in the
+  background is running until a read of its output shows a failure or a pass
+  summary (`12 passed`, `BUILD SUCCESS`).
 
 ## Credits
 
