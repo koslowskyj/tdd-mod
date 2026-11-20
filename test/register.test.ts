@@ -252,6 +252,25 @@ describe('tool.call', () => {
     ])
   })
 
+  test('a Bash write into the job scratch folder runs; with no environment, a write after cd ~/… is still judged', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    let failing = false
+    on('env.get', ($, e) => (failing ? { deny: 'unavailable' } : { value: e.name === 'CLAUDE_JOB_DIR' ? '/jobs/j' : undefined }))
+    const seen = engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const scratch = await $.tool.call({ tool: 'Bash', command: "cd $CLAUDE_JOB_DIR/tmp && cat > probe.py <<'EOF'\nprint(1)\nEOF" })
+    failing = true
+    const home = await $.tool.call({ tool: 'Bash', command: "cd ~/other && sed -i 's/a/b/' src/a.ts" })
+    expect([scratch.deny, home.deny?.match(/writes to (\S+)\./)?.[1], seen.prompts.length]).toEqual([undefined, 'src/a.ts', 0])
+  })
+
+  test('a Bash write after cd ~/… is read from the home folder', async ($, on) => {
+    on('session.root', () => ({ value: '/work/repo' }))
+    on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/work' : undefined }))
+    engine(on, { files: { ...inSibling }, reply: answer('{"kind":"pass","reason":"never asked"}') })
+    const result = await $.tool.call({ tool: 'Bash', command: "cd ~/other/core && sed -i 's/Foo/Baz/' src/main/java/Foo.java" })
+    expect(result.deny?.match(/writes to (\S+)\./)?.[1]).toBe(`${OTHER}/core/src/main/java/Foo.java`)
+  })
+
   test('a Bash command that cds into the sources and writes one is still sent to Write/Edit', async ($, on) => {
     engine(on, { reply: answer('{"kind":"pass","reason":"never asked"}') })
     const bySed = await $.tool.call({ tool: 'Bash', command: "cd src && sed -i 's/3/4/' cart.ts" })
@@ -268,9 +287,9 @@ describe('tool.call', () => {
   })
 
   // K13: a subagent reported a refused shell write to this test helper.
-  const HELPER = 'service/src/test/java/tech/konnek/agent/loop/ExistingSignIns.java'
-  const ROOT = '/home/johannes/workspaces/process-automation'
-  const javaBody = 'package tech.konnek.agent.loop;\nfinal class ExistingSignIns { java.util.Map<String, String> all() { return null; } }'
+  const HELPER = 'service/src/test/java/com/example/agent/loop/ExistingSignIns.java'
+  const ROOT = '/work/shop'
+  const javaBody = 'package com.example.agent.loop;\nfinal class ExistingSignIns { java.util.Map<String, String> all() { return null; } }'
   const shellRewrites: [string, string][] = [
     ['python heredoc, relative path', `python3 - <<'EOF'\nwith open('${HELPER}','w') as f:\n    f.write("""${javaBody}""")\nEOF`],
     ['python heredoc, path variable', `python3 - <<'EOF'\np = '${HELPER}'\ns = open(p).read()\nopen(p, 'w').write(s.replace('null', 'Map.of()'))\nEOF`],
@@ -283,12 +302,12 @@ describe('tool.call', () => {
     ['perl -i', `perl -i -pe 's/null/Map.of()/' ${HELPER}`],
     ['perl -pi, absolute path', `perl -pi -e 's/null/Map.of()/' ${ROOT}/${HELPER}`],
     ['sed -i, ./ path', `sed -i 's/null/Map.of()/' ./${HELPER}`],
-    ['cd into the module, module-relative path', "cd service && perl -i -pe 's/null/Map.of()/' src/test/java/tech/konnek/agent/loop/ExistingSignIns.java"],
+    ['cd into the module, module-relative path', "cd service && perl -i -pe 's/null/Map.of()/' src/test/java/com/example/agent/loop/ExistingSignIns.java"],
     ['cd elsewhere, absolute path', `cd /tmp && cat > ${ROOT}/${HELPER} <<'EOF'\n${javaBody}\nEOF`],
     ['cd up, ../ path', `cd service/src && cp /tmp/x.java ../../${HELPER}`],
     // A subagent cd'd into the test package; the path left after it has no test/ in it.
-    ['cd into the test package, package-relative path', `cd ${ROOT}/service/src/test/java/tech/konnek && sed -i 's/null/Map.of()/' agent/loop/ExistingSignIns.java`],
-    ['cd into the test package, python heredoc', `cd ${ROOT}/service/src/test/java/tech/konnek/agent/loop && python3 - <<'EOF'\np = 'ExistingSignIns.java'\ns = open(p).read()\nopen(p, 'w').write(s.replace('null', 'Map.of()'))\nEOF`],
+    ['cd into the test package, package-relative path', `cd ${ROOT}/service/src/test/java/com/example && sed -i 's/null/Map.of()/' agent/loop/ExistingSignIns.java`],
+    ['cd into the test package, python heredoc', `cd ${ROOT}/service/src/test/java/com/example/agent/loop && python3 - <<'EOF'\np = 'ExistingSignIns.java'\ns = open(p).read()\nopen(p, 'w').write(s.replace('null', 'Map.of()'))\nEOF`],
   ]
   test('a Bash rewrite of a test helper runs, in every shape a shell rewrite takes', async ($, on) => {
     on('session.root', () => ({ value: ROOT }))
@@ -1008,6 +1027,12 @@ describe('tdd logic', () => {
     expect(isInScope('src/gen/api.ts', config)).toBe(false)
   })
 
+  test('a Storybook story is a test file', () => {
+    expect(isTestFile('/r/web/.storybook/stories/Button.stories.ts')).toBe(true)
+    expect(isTestFile('/r/webui/src/Button.stories.tsx')).toBe(true)
+    expect(isTestFile('/r/webui/src/stories.ts')).toBe(false)
+  })
+
   test('isTestFile knows test folders and test file names', () => {
     const tests = [
       '/r/test/register.ts', 'test/a.py', '/r/tests/a.rs', '/r/service/src/test/java/a/Helper.java',
@@ -1135,6 +1160,69 @@ describe('tdd logic', () => {
     expect(lastTestRun([run('npm test > a.log 2>&1; echo rc=$?', 'rc=0'), run('cat b.log', 'FAIL')])).toEqual({ command: 'npm test > a.log 2>&1; echo rc=$?', output: 'rc=0', red: false })
   })
 
+  test('lastTestRun skips a test command a hook or the permission check refused: it never ran', () => {
+    const run = (command: string, output: string, isError?: true) => ({ kind: 'tool', tool: 'Bash', input: { command }, output, ...(isError && { isError }) }) as const
+    const real = run('mvn test', 'Tests run: 3, Failures: 0')
+    const refused = run("cat > src/A.java <<'EOF'\nx\nEOF\nmvn test", '<tool_use_error>tdd-mod: this command writes to src/A.java. Create and change source files with the Write or Edit tool, so the TDD check can judge the change.</tool_use_error>', true)
+    expect(lastTestRun([real, refused])).toEqual({ command: 'mvn test', output: 'Tests run: 3, Failures: 0', red: false })
+    expect(lastTestRun([real, run('npm test', 'PreToolUse:Bash hook error: blocked by policy', true)])?.command).toBe('mvn test')
+    expect(lastTestRun([real, run('npm test', "Permission to use Bash with command npm test has been denied.", true)])?.command).toBe('mvn test')
+  })
+
+  test('lastTestRun reads a run sent to the background from the reads of its output file', () => {
+    const run = (command: string, output: string) => ({ kind: 'tool', tool: 'Bash', input: { command }, output }) as const
+    const file = '/tmp/claude-1000/p/s/tasks/bu32s7c83.output'
+    const background = run('npx playwright test e2e/og.spec.ts', `Command running in background with ID: bu32s7c83. Output is being written to: ${file}. You will be notified when it completes.`)
+    const vitest = run('npx vitest run', 'Tests  12 passed')
+    const tail = run(`tail -20 ${file}`, '4 failed\n  e2e/og.spec.ts:12 toolbar visible')
+    expect(lastTestRun([background, tail])?.red).toBe(true)
+    expect(lastTestRun([background, { kind: 'tool', tool: 'Read', input: { file_path: file }, output: '4 failed' }])?.red).toBe(true)
+    // A later run in the foreground is still the last run.
+    expect(lastTestRun([background, tail, vitest])?.command).toBe('npx vitest run')
+    // A read that shows the run passed ends it, green.
+    expect(lastTestRun([background, run(`tail -3 ${file}`, '  12 passed (4.1s)')])).toEqual({ command: background.input.command, output: `${background.output}\n$ tail -3 ${file}\n  12 passed (4.1s)`, red: false })
+  })
+
+  test('a read of a background run that shows neither a failure nor a pass leaves it running', () => {
+    const run = (command: string, output: string) => ({ kind: 'tool', tool: 'Bash', input: { command }, output }) as const
+    const file = '/tmp/claude-1000/p/s/tasks/b2.output'
+    const background = run('npx playwright test', `Command running in background with ID: b2. Output is being written to: ${file}. You will be notified when it completes.`)
+    expect(lastTestRun([background, run(`tail ${file}`, 'Running 4 tests using 2 workers')])?.running).toBe(true)
+    expect(lastTestRun([background, run(`cat ${file}`, '')])?.running).toBe(true)
+  })
+
+  test('a background run ends at its final summary or its completion notice, not at a progress line', () => {
+    const run = (command: string, output: string) => ({ kind: 'tool', tool: 'Bash', input: { command }, output }) as const
+    const file = '/tmp/claude-1000/p/s/tasks/b3.output'
+    const background = (command: string) => run(command, `Command running in background with ID: b3. Output is being written to: ${file}. You will be notified when it completes.`)
+    const tail = (output: string) => run(`tail ${file}`, output)
+    // A test class that passed while the build goes on.
+    expect(lastTestRun([background('mvn test'), tail('Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.05 s -- in com.example.FooTest')])?.running).toBe(true)
+    expect(lastTestRun([background('go test ./...'), tail('ok  \texample.com/a\t0.4s')])?.running).toBe(true)
+    expect(lastTestRun([background('./gradlew test'), tail('BUILD SUCCESSFUL in 3s')])).toMatchObject({ red: false })
+    expect(lastTestRun([background('./gradlew test'), tail('BUILD SUCCESSFUL in 3s')])?.running).toBeUndefined()
+    const notice = (status: string) => ({ kind: 'prompt', text: `<task-notification>\n<task-id>b3</task-id>\n<output-file>${file}</output-file>\n<status>${status}</status>\n</task-notification>` }) as const
+    expect(lastTestRun([background('go test ./...'), notice('completed')])).toMatchObject({ red: false })
+    expect(lastTestRun([background('go test ./...'), notice('completed')])?.running).toBeUndefined()
+    expect(lastTestRun([background('go test ./...'), notice('failed')])?.red).toBe(true)
+    // A run killed before it ended has no result.
+    expect(lastTestRun([background('go test ./...'), notice('killed')])?.running).toBe(true)
+    // .NET and umbrella mix print a summary per project, while the others still run.
+    expect(lastTestRun([background('dotnet test'), tail('Passed!  - Failed: 0, Passed: 12 - A.Tests.dll')])?.running).toBe(true)
+    expect(lastTestRun([background('mix test'), tail('12 tests, 0 failures')])?.running).toBe(true)
+  })
+
+  test('a background run whose output is not read yet is still running, not green', () => {
+    const file = '/tmp/claude-1000/p/s/tasks/b1.output'
+    const background = { kind: 'tool', tool: 'Bash', input: { command: 'npx playwright test' }, output: `Command running in background with ID: b1. Output is being written to: ${file}. You will be notified when it completes.` } as const
+    expect(lastTestRun([background])).toMatchObject({ command: 'npx playwright test', red: false, running: true })
+    const prompt = buildPrompt([background], { kind: 'absent' }, { path: 'a.ts', content: 'x' })
+    expect(prompt).toContain('is still running in the background')
+    expect(prompt).not.toContain('green: every test passed')
+    expect(prompt).not.toContain('this may be the refactor step')
+    expect(nextStep(lastTestRun([background]))).toContain('read the output of the test run in the background')
+  })
+
   test('evidenceOf changes with a new test run or prompt, not with other tool calls', () => {
     const base = toHistory(FAILED_RUN)
     const read = { kind: 'tool', tool: 'Read', input: {}, output: 'x' } as const
@@ -1149,6 +1237,60 @@ describe('tdd logic', () => {
     const REFACTOR = 'The tests are green, so this may be the refactor step'
     expect(after(' 3 pass\n 0 fail')).toContain(REFACTOR)
     expect(after('FAIL a.test.ts')).not.toContain(REFACTOR)
+  })
+
+  test('a failing lint or static-analysis check is a red run with its own next step; a passing one is no run', () => {
+    const check = (output: string) => ({ kind: 'tool', tool: 'Bash', input: { command: 'mvn -q pmd:check' }, output, isError: true }) as const
+    const red = lastTestRun([check('Exit code 1\n[ERROR] PMD Failure: com.example.A:42 Rule:NullConstructorArgument\n[ERROR] BUILD FAILURE')])
+    expect(red).toMatchObject({ command: 'mvn -q pmd:check', red: true, check: true })
+    expect(nextStep(red)).toContain('change only what the failing check asks for')
+    const prompt = buildPrompt([check('[ERROR] PMD Failure\nBUILD FAILURE')], { kind: 'absent' }, { path: 'a.java', content: 'x' })
+    expect(prompt).toContain('was red: a check failed')
+    expect(lastTestRun([{ kind: 'tool', tool: 'Bash', input: { command: 'npx eslint src' }, output: '' }])).toBeUndefined()
+  })
+
+  test('a check is one only where it runs, and one that passed on a rerun is no longer failing', () => {
+    const bash = (command: string, output: string, isError?: true) => ({ kind: 'tool', tool: 'Bash', input: { command }, output, ...(isError && { isError }) }) as const
+    const green = bash('npm test', 'Tests 3 passed')
+    expect(lastTestRun([green, bash('grep -rn eslint-disable src', 'Exit code 1', true)])).toEqual({ command: 'npm test', output: 'Tests 3 passed', red: false })
+    expect(lastTestRun([green, bash("git commit -m 'fix tsc errors'", 'Exit code 1\nhook failed', true)])?.command).toBe('npm test')
+    expect(lastTestRun([green, bash('npx eslint src', 'Exit code 1\n2 problems', true)])?.check).toBe(true)
+    // A check that exited non-zero without reporting findings (it crashed, or was not installed) is no red step.
+    expect(lastTestRun([green, bash('npx eslint src', 'Exit code 127\nnpx: command not found', true)])?.command).toBe('npm test')
+    const fixed = [green, bash('mvn -q pmd:check', 'Exit code 1\n[ERROR] PMD Failure', true), bash('mvn -q pmd:check', 'BUILD SUCCESS')]
+    expect(lastTestRun(fixed)?.command).toBe('npm test')
+    // Another tool passing does not clear a check it did not rerun.
+    expect(lastTestRun([green, bash('npx eslint src', 'Exit code 1\n3 problems', true), bash('npx tsc --noEmit', '')])?.command).toBe('npx eslint src')
+    // A check on a later line, or after a variable, still runs.
+    expect(lastTestRun([green, bash('cd web\nCI=1 npx eslint src', 'Exit code 1\n3 problems', true)])?.check).toBe(true)
+  })
+
+  test('the findings of each listed checker make it red', () => {
+    const red = (command: string, output: string) => lastTestRun([{ kind: 'tool', tool: 'Bash', input: { command }, output: `Exit code 1\n${output}`, isError: true }])?.check
+    expect(red('flake8 src', "src/a.py:1:1: F401 'os' imported but unused")).toBe(true)
+    expect(red('pylint src', 'a.py:1:0: C0114: Missing module docstring (missing-module-docstring)')).toBe(true)
+    expect(red('golangci-lint run', 'a.go:5:2: Error return value is not checked (errcheck)\n1 issues:')).toBe(true)
+    expect(red('cargo clippy -- -D warnings', 'error: unused variable: `x`\nerror: could not compile `app` due to 2 previous errors')).toBe(true)
+    expect(red('./gradlew pmdMain', 'FAILURE: Build failed with an exception.\n2 PMD rule violations were found.\nBUILD FAILED in 4s')).toBe(true)
+  })
+
+  test('the prompt always carries the rules for check-driven changes and outside-in tests', () => {
+    const prompt = buildPrompt([], { kind: 'absent' }, { path: 'a.java', content: 'x' })
+    expect(prompt).toContain('## Changes a failing check drives')
+    expect(prompt).toContain('## Outside-in tests')
+  })
+
+  test('only under green does the prompt let styling, logging and framework registration pass', () => {
+    const after = (output: string) => buildPrompt([{ kind: 'tool', tool: 'Bash', input: { command: 'npm test' }, output }], { kind: 'absent' }, { path: 'a.vue', content: 'x' })
+    const STYLING = 'styling (CSS, a theme rule), a log line, or registering a class with a framework'
+    expect(after('Tests 3 passed')).toContain(STYLING)
+    expect(after('FAIL a.test.ts')).not.toContain(STYLING)
+  })
+
+  test('a timed-out outside-in test is a red run whose next step is the failing assertion', () => {
+    const red = [{ kind: 'tool', tool: 'Bash', input: { command: 'npx playwright test' }, output: "1 failed\nTimeoutError: waiting for getByTestId('export-dialog')" }] as const
+    expect(lastTestRun(red)?.red).toBe(true)
+    expect(nextStep(lastTestRun(red))).toContain('change only what the failing assertion needs')
   })
 
   test('the prompt says so when no test has run yet', () => {

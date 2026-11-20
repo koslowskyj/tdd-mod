@@ -109,9 +109,9 @@ export function readConfig(options: PluginOptions): Config {
 }
 
 // A test folder (test/, tests/, __tests__/, so src/test/ too) or a test file name:
-// *.test.*, *.spec.*, *Test.java|kt, *IT.java|kt, test_*.py, *_test.py, *_test.go.
+// *.test.*, *.spec.*, *.stories.* (Storybook), *Test.java|kt, *IT.java|kt, test_*.py, *_test.py, *_test.go.
 const TEST_FILE =
-  /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.\w+$|[a-z0-9](?:Test|IT)\.(?:java|kt)$|(?:^|\/)test_\w+\.py$|_test\.(?:py|go)$/
+  /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec|stories)\.\w+$|[a-z0-9](?:Test|IT)\.(?:java|kt)$|(?:^|\/)test_\w+\.py$|_test\.(?:py|go)$/
 
 /**
  * Whether `path` is a test file: writing one is the red step, never judged.
